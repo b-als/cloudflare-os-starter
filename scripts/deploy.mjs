@@ -344,7 +344,11 @@ async function readDeployment(path) {
 }
 
 function run(args, cwd = root, env = process.env) {
-  const result = spawnSync("pnpm", args, { cwd, env, stdio: "inherit" });
+  const pnpmCommand = process.platform === "win32" ? process.execPath : "pnpm";
+  const pnpmArgs = process.platform === "win32"
+    ? ["C:/Users/bals/AppData/Local/node/corepack/v1/pnpm/11.9.0/bin/pnpm.cjs"]
+    : [];
+  const result = spawnSync(pnpmCommand, [...pnpmArgs, ...args], { cwd, env, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const where = relative(root, cwd) || ".";
