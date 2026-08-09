@@ -12,7 +12,7 @@
       // Production: use a hostname in an active Cloudflare zone. Wrangler creates DNS and TLS.
       // Evaluation: replace this with "route": { "workersDev": true }.
       // https://developers.cloudflare.com/workers/configuration/routing/custom-domains/
-      "route": { "workersDev": true }
+      "route": { "customDomain": "robotrs.com" }
     },
     "context": { "name": "robotrs-context" },
     "customGatekeeper": { "name": "robotrs-custom" },
