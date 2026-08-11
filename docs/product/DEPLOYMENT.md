@@ -26,6 +26,23 @@ Required operator configuration in `deployment.jsonc`:
 
 KV and R2 resources can remain on automatic provisioning for the first evaluation deployment.
 
+Suggested evaluation route in `deployment.jsonc`:
+
+```jsonc
+"workers": {
+  "workshop": {
+    "name": "<WORKSHOP_WORKER_NAME>",
+    "route": { "workersDev": true }
+  }
+}
+```
+
+Deployment commands:
+
+1. `pnpm exec wrangler login`
+2. `pnpm check`
+3. `pnpm deploy`
+
 ## Gate 3 — v0.2 acceptance flow
 
 The deployed system passes when a signed-in user can ask the agent to:
