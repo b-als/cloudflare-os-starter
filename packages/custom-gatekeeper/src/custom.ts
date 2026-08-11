@@ -18,29 +18,90 @@ import type {
   SupportedResource,
   VendorDescription,
 } from "@gadgets/workshop-shared/gatekeeper";
-import type { CustomDeploymentInfo, CustomSession } from "./types.js";
+import type { ApprovalRequest, CustomSession, Invoice } from "./types.js";
 import TYPES_CODE from "./types-code.js";
 
 const CUSTOM_ICON = {
   url:
     "data:image/svg+xml," +
     encodeURIComponent(
-      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='none' stroke='currentColor' stroke-width='20'><path d='M52 72h152v112H52z'/><path d='m52 88 76 52 76-52'/></svg>",
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='none' stroke='currentColor' stroke-width='20'><rect x='44' y='40' width='168' height='176' rx='18'/><path d='M78 88h100M78 128h100M78 168h60'/><path d='m158 174 16 16 30-34'/></svg>",
     ),
 };
 
-type ObservationQueue = Pick<ApprovalQueue, "authorizeObservation"> &
+const INVOICES_KEY = "product:synthetic-invoices";
+const ACTION_COUNTER_KEY = "product:next-action-id";
+const ACTION_PREFIX = "product:approval-action:";
+
+const SYNTHETIC_INVOICES: Invoice[] = [
+  {
+    id: "INV-1042",
+    supplier: "Northstar Components Ltd",
+    amount: 28750,
+    currency: "GBP",
+    purchaseOrder: "PO-7712",
+    owner: "Operations",
+    status: "awaiting_approval",
+    requiredApprover: "Finance Director",
+  },
+  {
+    id: "INV-1048",
+    supplier: "Apex Industrial Services",
+    amount: 46200,
+    currency: "GBP",
+    purchaseOrder: null,
+    owner: "Facilities",
+    status: "blocked",
+    blockedReason: "No purchase order is attached. Policy requires a valid PO before invoices above £10,000 can enter approval.",
+    requiredApprover: "Finance Director",
+  },
+  {
+    id: "INV-1051",
+    supplier: "Meridian Logistics UK",
+    amount: 18450,
+    currency: "GBP",
+    purchaseOrder: "PO-7738",
+    owner: "Supply Chain",
+    status: "awaiting_approval",
+    requiredApprover: "Head of Finance",
+  },
+  {
+    id: "INV-1057",
+    supplier: "Vertex Consulting Group",
+    amount: 73500,
+    currency: "GBP",
+    purchaseOrder: "PO-7744",
+    owner: "Transformation",
+    status: "blocked",
+    blockedReason: "Invoice value exceeds the £50,000 delegated authority threshold and requires CFO approval before progression.",
+    requiredApprover: "CFO",
+  },
+];
+
+type ObservationQueue = Pick<ApprovalQueue, "authorizeObservation" | "submitAction"> &
   Partial<{ [Symbol.dispose](): void }>;
+
+type PendingApprovalAction = {
+  invoiceId: string;
+};
+
+async function loadInvoices(storage: DurableObjectStorage): Promise<Invoice[]> {
+  const stored = await storage.get<Invoice[]>(INVOICES_KEY);
+  if (stored) return stored;
+  const seeded = SYNTHETIC_INVOICES.map((invoice) => ({ ...invoice }));
+  await storage.put(INVOICES_KEY, seeded);
+  return seeded;
+}
 
 export function describeCustomVendor(): VendorDescription {
   return {
-    displayName: "Custom Gatekeeper",
-    url: "https://github.com/cloudflare/cloudflare-os-starter",
+    displayName: "Finance Operations",
+    url: "https://github.com/b-als/cloudflare-os-starter",
     logo: CUSTOM_ICON,
-    color: "#e8f2ff",
-    tagline: "Example organization-specific capability",
+    color: "#eef4ff",
+    tagline: "Inspect invoices and progress governed approvals",
     description:
-      "A minimal Gatekeeper to copy when connecting CloudflareOS to your organization's systems.",
+      "A product-owned enterprise capability demonstrating how Cloudflare OS can inspect business data and request controlled workflow actions without giving the model direct write authority.",
     autoProvisionsAccount: true,
     providesAuth: false,
   };
@@ -48,7 +109,7 @@ export function describeCustomVendor(): VendorDescription {
 
 export function describeCustomAccount(): AccountDescription {
   return {
-    displayName: "Custom Gatekeeper",
+    displayName: "Synthetic Finance Workspace",
     avatar: CUSTOM_ICON,
     singleton: { tsType: "CustomSession" },
   };
@@ -57,20 +118,76 @@ export function describeCustomAccount(): AccountDescription {
 @validateRpc()
 export class CustomSessionImpl extends RpcTarget implements CustomSession {
   readonly #approvalQueue: ObservationQueue;
-  readonly #info: CustomDeploymentInfo;
+  readonly #storage: DurableObjectStorage;
 
-  constructor(approvalQueue: ObservationQueue, info: CustomDeploymentInfo) {
+  constructor(approvalQueue: ObservationQueue, storage: DurableObjectStorage) {
     super();
     this.#approvalQueue = approvalQueue;
-    this.#info = info;
+    this.#storage = storage;
   }
 
-  async getDeploymentInfo(): Promise<CustomDeploymentInfo> {
+  async listPendingInvoices(): Promise<Invoice[]> {
     await this.#approvalQueue.authorizeObservation({
-      title: "Read deployment information",
-      description: "Read the custom information configured by this deployment.",
+      title: "List pending invoices",
+      description: "Read synthetic invoice records that currently require finance attention.",
     });
-    return this.#info;
+    const invoices = await loadInvoices(this.#storage);
+    return invoices.filter((invoice) => invoice.status !== "approved");
+  }
+
+  async getInvoice(invoiceId: string): Promise<Invoice | null> {
+    await this.#approvalQueue.authorizeObservation({
+      title: `Read invoice ${invoiceId}`,
+      description: `Read the synthetic finance record and workflow state for invoice ${invoiceId}.`,
+    });
+    const invoices = await loadInvoices(this.#storage);
+    return invoices.find((invoice) => invoice.id === invoiceId) ?? null;
+  }
+
+  async explainBlockedInvoice(invoiceId: string): Promise<string> {
+    await this.#approvalQueue.authorizeObservation({
+      title: `Explain invoice ${invoiceId}`,
+      description: `Read the deterministic workflow reason affecting invoice ${invoiceId}.`,
+    });
+    const invoices = await loadInvoices(this.#storage);
+    const invoice = invoices.find((candidate) => candidate.id === invoiceId);
+    if (!invoice) return `Invoice ${invoiceId} was not found.`;
+    if (invoice.status === "approved") return `${invoiceId} is already approved.`;
+    if (invoice.status !== "blocked") {
+      return `${invoiceId} is not blocked. It is awaiting approval from ${invoice.requiredApprover}.`;
+    }
+    return invoice.blockedReason ?? `${invoiceId} is blocked by finance policy.`;
+  }
+
+  async requestInvoiceApproval(invoiceId: string): Promise<ApprovalRequest> {
+    const invoices = await loadInvoices(this.#storage);
+    const invoice = invoices.find((candidate) => candidate.id === invoiceId);
+    if (!invoice) throw new Error(`Invoice ${invoiceId} was not found.`);
+    if (invoice.status === "approved") throw new Error(`Invoice ${invoiceId} is already approved.`);
+    if (invoice.status === "blocked") {
+      throw new Error(invoice.blockedReason ?? `Invoice ${invoiceId} is blocked by finance policy.`);
+    }
+
+    const actionId = await this.#storage.transaction(async (txn) => {
+      const current = (await txn.get<number>(ACTION_COUNTER_KEY)) ?? 1;
+      await txn.put(ACTION_COUNTER_KEY, current + 1);
+      await txn.put<PendingApprovalAction>(`${ACTION_PREFIX}${current}`, { invoiceId });
+      return current;
+    });
+
+    await this.#approvalQueue.submitAction(actionId, {
+      title: `Progress ${invoiceId} for approval`,
+      description:
+        `Submit **${invoiceId}** from **${invoice.supplier}** for approval by **${invoice.requiredApprover}**.\n\n` +
+        `Amount: **£${invoice.amount.toLocaleString("en-GB")}**\n\n` +
+        `This synthetic action changes the invoice workflow state to approved only after the Cloudflare OS approval queue applies it.`,
+    });
+
+    return {
+      invoiceId,
+      submitted: true,
+      message: `${invoiceId} has been submitted to the governed approval queue for ${invoice.requiredApprover}.`,
+    };
   }
 
   [Symbol.dispose](): void {
@@ -82,10 +199,10 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
 export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements Gatekeeper<CustomSession> {
   async describe(): Promise<ResourceDescription> {
     return {
-      url: "custom://deployment-info",
-      title: "Deployment information",
-      snippet: "Organization-specific information supplied by this deployment.",
-      suggestedBindingName: "CUSTOM",
+      url: "product://finance/invoices",
+      title: "Finance invoice workflow",
+      snippet: "Synthetic invoices with governed approval progression.",
+      suggestedBindingName: "FINANCE",
       tsType: "CustomSession",
     };
   }
@@ -99,23 +216,36 @@ export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements G
   }
 
   async startSession(approvalQueue: RpcStub<ApprovalQueue>): Promise<CustomSession> {
-    return new CustomSessionImpl(approvalQueue.dup(), {
-      name: this.env.CUSTOM_NAME,
-      message: this.env.CUSTOM_MESSAGE,
-    });
+    await loadInvoices(this.ctx.storage);
+    return new CustomSessionImpl(approvalQueue.dup(), this.ctx.storage);
   }
 
   async addObserver(_id: string, _user: Fetcher<GatekeeperUserVerifier>): Promise<void> {}
   async removeObserver(_id: string): Promise<void> {}
 
   async applyAction(action: number): Promise<void> {
-    throw new Error(`Custom Gatekeeper has no actions (${action}).`);
+    const pending = await this.ctx.storage.get<PendingApprovalAction>(`${ACTION_PREFIX}${action}`);
+    if (!pending) throw new Error(`Unknown invoice approval action ${action}.`);
+
+    const invoices = await loadInvoices(this.ctx.storage);
+    const index = invoices.findIndex((invoice) => invoice.id === pending.invoiceId);
+    if (index < 0) throw new Error(`Invoice ${pending.invoiceId} was not found.`);
+
+    invoices[index] = {
+      ...invoices[index],
+      status: "approved",
+      blockedReason: undefined,
+    };
+    await this.ctx.storage.put(INVOICES_KEY, invoices);
+    await this.ctx.storage.delete(`${ACTION_PREFIX}${action}`);
   }
 
-  async rejectAction(_action: number): Promise<void> {}
+  async rejectAction(action: number): Promise<void> {
+    await this.ctx.storage.delete(`${ACTION_PREFIX}${action}`);
+  }
 
   async revertAction(_action: number): Promise<void> {
-    throw new Error("Custom Gatekeeper has no actions to revert.");
+    throw new Error("Synthetic invoice approvals are not reversible in v0.2.");
   }
 }
 
@@ -134,11 +264,11 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
   }
 
   getGatekeeperClassFor(_url: string): never {
-    throw new Error("Custom Gatekeeper has no URL-addressed resources.");
+    throw new Error("Finance Operations has no URL-addressed resources.");
   }
 
   startResourceConfigurator(_resourceUrlPattern: string): Promise<ResourceConfiguratorFrame> {
-    throw new Error("Custom Gatekeeper has no URL-addressed resources.");
+    throw new Error("Finance Operations has no URL-addressed resources.");
   }
 
   async ensureResources(_resourceUrlPatterns: string[]): Promise<{ url?: string }> {
@@ -148,7 +278,7 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
   async revoke(): Promise<void> {}
 
   reconnect(): Promise<{ url: string }> {
-    throw new Error("Custom Gatekeeper has no credentials to reconnect.");
+    throw new Error("Finance Operations is auto-provisioned and has no reconnect flow.");
   }
 
   async getAuthenticatedEmail(): Promise<string | null> {
@@ -181,7 +311,7 @@ export class GatekeeperVendor extends WorkerEntrypoint<Cloudflare.Env> {
     _callback: Fetcher<GatekeeperConnectCallback>,
     _options?: GatekeeperConnectOptions,
   ): Promise<{ url: string }> {
-    throw new Error("Custom Gatekeeper is auto-provisioned and has no connect flow.");
+    throw new Error("Finance Operations is auto-provisioned and has no connect flow.");
   }
 
   async getSupportedResources(_options?: { userId?: string }): Promise<SupportedResource[]> {
