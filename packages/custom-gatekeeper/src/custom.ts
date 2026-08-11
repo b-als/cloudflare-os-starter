@@ -93,6 +93,26 @@ async function loadInvoices(storage: DurableObjectStorage): Promise<Invoice[]> {
   return seeded;
 }
 
+export async function applyPendingInvoiceApprovalAction(
+  storage: DurableObjectStorage,
+  action: number,
+): Promise<void> {
+  const pending = await storage.get<PendingApprovalAction>(`${ACTION_PREFIX}${action}`);
+  if (!pending) throw new Error(`Unknown invoice approval action ${action}.`);
+
+  const invoices = await loadInvoices(storage);
+  const index = invoices.findIndex((invoice) => invoice.id === pending.invoiceId);
+  if (index < 0) throw new Error(`Invoice ${pending.invoiceId} was not found.`);
+
+  invoices[index] = {
+    ...invoices[index],
+    status: "approved",
+    blockedReason: undefined,
+  };
+  await storage.put(INVOICES_KEY, invoices);
+  await storage.delete(`${ACTION_PREFIX}${action}`);
+}
+
 export function describeCustomVendor(): VendorDescription {
   return {
     displayName: "Finance Operations",
@@ -181,6 +201,8 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
         `Submit **${invoiceId}** from **${invoice.supplier}** for approval by **${invoice.requiredApprover}**.\n\n` +
         `Amount: **£${invoice.amount.toLocaleString("en-GB")}**\n\n` +
         `This synthetic action changes the invoice workflow state to approved only after the Cloudflare OS approval queue applies it.`,
+      implementsRevert: false,
+      awaitDecision: true,
     });
 
     return {
@@ -224,20 +246,7 @@ export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements G
   async removeObserver(_id: string): Promise<void> {}
 
   async applyAction(action: number): Promise<void> {
-    const pending = await this.ctx.storage.get<PendingApprovalAction>(`${ACTION_PREFIX}${action}`);
-    if (!pending) throw new Error(`Unknown invoice approval action ${action}.`);
-
-    const invoices = await loadInvoices(this.ctx.storage);
-    const index = invoices.findIndex((invoice) => invoice.id === pending.invoiceId);
-    if (index < 0) throw new Error(`Invoice ${pending.invoiceId} was not found.`);
-
-    invoices[index] = {
-      ...invoices[index],
-      status: "approved",
-      blockedReason: undefined,
-    };
-    await this.ctx.storage.put(INVOICES_KEY, invoices);
-    await this.ctx.storage.delete(`${ACTION_PREFIX}${action}`);
+    await applyPendingInvoiceApprovalAction(this.ctx.storage, action);
   }
 
   async rejectAction(action: number): Promise<void> {
