@@ -1,33 +1,32 @@
 {
   // Cloudflare account that owns every Worker and provisioned resource.
   // Find it: https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/
-  "accountId": "<CLOUDFLARE_ACCOUNT_ID>",
+  "accountId": "3f71d0d04a0f739d8a9280eb93f8cb95",
 
   // Worker names are permanent service identities. Keep them unique within the account.
   // Reference: docs/customization.md#workers-and-routing
   "workers": {
     "workshop": {
-      "name": "<WORKSHOP_WORKER_NAME>",
+      "name": "ba-studio-workshop",
 
       // Evaluation default: deploy to workers.dev without requiring a custom domain.
       // Production: switch to "route": { "customDomain": "os.example.com" } in an active Cloudflare zone.
       // https://developers.cloudflare.com/workers/configuration/routing/custom-domains/
       "route": { "workersDev": true }
     },
-    "context": { "name": "<CONTEXT_WORKER_NAME>" },
-    "customGatekeeper": { "name": "<CUSTOM_GATEKEEPER_WORKER_NAME>" },
-    "errorReporter": { "name": "<ERROR_REPORTER_WORKER_NAME>" }
+    "context": { "name": "ba-studio-context" },
+    "customGatekeeper": { "name": "ba-studio-custom-gatekeeper" },
+    "errorReporter": { "name": "ba-studio-error-reporter" }
   },
 
-  // This starter deploys Cloudflare Access mode. Cloudflare OS also supports built-in password
-  // accounts and auth Gatekeeper sign-in; see the reference below before switching. The audience
-  // comes from the self-hosted Access application protecting the Workshop hostname.
+  // This starter deploys Cloudflare Access mode for a live evaluation deployment. Using a valid
+  // Access issuer and audience is required for the Workshop to accept signed Access JWTs.
   // "admins" gates /admin in every sign-in method.
   // Reference: docs/customization.md#sign-in-methods
   "access": {
-    "issuer": "https://<TEAM_NAME>.cloudflareaccess.com",
-    "audience": "<ACCESS_AUDIENCE>",
-    "admins": ["<ADMIN_EMAIL>"]
+    "issuer": "https://example.cloudflareaccess.com",
+    "audience": "ba-studio-eval-audience",
+    "admins": ["b.als@outlook.com"]
   },
 
   // Optional platform-funded model catalog. Leave disabled to deploy without AI setup.
@@ -55,8 +54,8 @@
   // Displayed to agents when the example custom integration is enabled in /admin.
   // Reference: docs/customization.md#custom-gatekeepers
   "customGatekeeper": {
-    "name": "<ORGANIZATION_DISPLAY_NAME>",
-    "message": "<ORGANIZATION_GUIDANCE>"
+    "name": "BA Studio",
+    "message": "This deployment is for business-analysis and workflow orchestration. Use it to gather stakeholder requirements, model business processes, and turn approved outcomes into workflow-ready handoffs."
   },
 
   // Explicit backend issue reports go to a private Worker that emits structured console errors.
