@@ -18,7 +18,15 @@ import type {
   SupportedResource,
   VendorDescription,
 } from "@gadgets/workshop-shared/gatekeeper";
-import type { CustomDeploymentInfo, CustomSession } from "./types.js";
+import { BUSINESS_ANALYSIS_SCHEMA_V1, BUSINESS_ANALYSIS_SCHEMA_V11 } from "./ba-schema.js";
+import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
+import type {
+  BusinessAnalysisSchemaBundleV1,
+  BusinessAnalysisSchemaBundleV11,
+  CustomDeploymentInfo,
+  CustomSession,
+  WorkflowStudioDemoV11,
+} from "./types.js";
 import TYPES_CODE from "./types-code.js";
 
 const CUSTOM_ICON = {
@@ -71,6 +79,36 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
       description: "Read the custom information configured by this deployment.",
     });
     return this.#info;
+  }
+
+  async getBusinessAnalysisSchemaV1(): Promise<BusinessAnalysisSchemaBundleV1> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read business analysis schema",
+      description: "Read the v1 JSON schemas for requirements, conflict registers, and process graphs.",
+    });
+    return BUSINESS_ANALYSIS_SCHEMA_V1;
+  }
+
+  async getBusinessAnalysisSchemaV11(): Promise<BusinessAnalysisSchemaBundleV11> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read business analysis schema v1.1",
+      description:
+        "Read the v1.1 JSON schemas for requirements, conflicts, process maps, trade-offs, and sign-off packets.",
+    });
+    return BUSINESS_ANALYSIS_SCHEMA_V11;
+  }
+
+  async getWorkflowStudioDemoV11(): Promise<WorkflowStudioDemoV11> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read workflow studio demo v1.1",
+      description:
+        "Read a validated end-to-end BA artifact bundle for workflow viewer and editor integration.",
+    });
+    const errors = validateWorkflowStudioDemoV11(WORKFLOW_STUDIO_DEMO_V11);
+    if (errors.length) {
+      throw new Error(`Workflow studio demo v1.1 is invalid: ${errors.join(" | ")}`);
+    }
+    return WORKFLOW_STUDIO_DEMO_V11;
   }
 
   [Symbol.dispose](): void {

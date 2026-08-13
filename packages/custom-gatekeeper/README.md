@@ -8,6 +8,8 @@ Change only the pieces your integration needs:
 
 - `src/types.d.ts`: replace `CustomSession` with the API agents and Gadgets may call.
 - `src/types-code.ts`: keep the agent-facing declaration synchronized with `types.d.ts`.
+- `src/ba-schema.ts`: customize the v1 and v1.1 JSON schemas and validators for requirements, conflict registers, process graphs, trade-offs, and sign-off packets.
+- `src/workflow-demo.ts`: adjust the end-to-end workflow studio demo payload used for viewer/editor contract integration.
 - `src/custom.ts`: replace `getDeploymentInfo()` and its observation description with the real read operation.
 - `src/custom.ts`: update vendor, account, resource, and binding metadata.
 - `wrangler.jsonc`: add non-secret bindings/variables and a migration when adding Durable Object classes.
@@ -28,3 +30,5 @@ pnpm test
 pnpm run types:check
 pnpm exec wrangler deploy --dry-run
 ```
+
+The tests include a full workflow demo contract check (`validateWorkflowStudioDemoV11`) so you can iterate on schema and viewer mappings safely.

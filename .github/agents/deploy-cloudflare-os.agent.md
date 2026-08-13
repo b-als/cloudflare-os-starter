@@ -66,6 +66,9 @@ Your job is to deploy the official `cloudflare-os-starter` wrapper safely and re
 
 ## Safety Rules
 
+- Never create, update, or push a public pull request for this repository unless the user explicitly asks for a public PR.
+- Keep deployment and product changes on the user's private fork or local branch by default.
+- Before any publishing action, confirm the target repository, branch, and visibility.
 - Do not run `wrangler delete`, remove KV namespaces, delete R2 buckets, reset Durable Objects, or change production resources without explicit user approval.
 - Do not retry blindly after an API error. Read the error, inspect resource state, and make the smallest idempotent correction.
 - Do not claim deployment success unless the deploy command completed successfully and the final URL or Worker deployment was verified.
