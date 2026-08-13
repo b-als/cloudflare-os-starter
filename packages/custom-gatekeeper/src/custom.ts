@@ -18,110 +18,40 @@ import type {
   SupportedResource,
   VendorDescription,
 } from "@gadgets/workshop-shared/gatekeeper";
-import type { ApprovalRequest, CustomSession, Invoice } from "./types.js";
+import { BUSINESS_ANALYSIS_SCHEMA_V1, BUSINESS_ANALYSIS_SCHEMA_V11 } from "./ba-schema.js";
+import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
+import { createBaSessionContext } from "./ba-session.js";
+import type {
+  BaSessionConfig,
+  BaSessionContext,
+  BusinessAnalysisSchemaBundleV1,
+  BusinessAnalysisSchemaBundleV11,
+  CustomDeploymentInfo,
+  CustomSession,
+  WorkflowStudioDemoV11,
+} from "./types.js";
 import TYPES_CODE from "./types-code.js";
 
 const CUSTOM_ICON = {
   url:
     "data:image/svg+xml," +
     encodeURIComponent(
-      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='none' stroke='currentColor' stroke-width='20'><rect x='44' y='40' width='168' height='176' rx='18'/><path d='M78 88h100M78 128h100M78 168h60'/><path d='m158 174 16 16 30-34'/></svg>",
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='none' stroke='currentColor' stroke-width='20'><path d='M52 72h152v112H52z'/><path d='m52 88 76 52 76-52'/></svg>",
     ),
 };
 
-const INVOICES_KEY = "product:synthetic-invoices";
-const ACTION_COUNTER_KEY = "product:next-action-id";
-const ACTION_PREFIX = "product:approval-action:";
-
-const SYNTHETIC_INVOICES: Invoice[] = [
-  {
-    id: "INV-1042",
-    supplier: "Northstar Components Ltd",
-    amount: 28750,
-    currency: "GBP",
-    purchaseOrder: "PO-7712",
-    owner: "Operations",
-    status: "awaiting_approval",
-    requiredApprover: "Finance Director",
-  },
-  {
-    id: "INV-1048",
-    supplier: "Apex Industrial Services",
-    amount: 46200,
-    currency: "GBP",
-    purchaseOrder: null,
-    owner: "Facilities",
-    status: "blocked",
-    blockedReason: "No purchase order is attached. Policy requires a valid PO before invoices above £10,000 can enter approval.",
-    requiredApprover: "Finance Director",
-  },
-  {
-    id: "INV-1051",
-    supplier: "Meridian Logistics UK",
-    amount: 18450,
-    currency: "GBP",
-    purchaseOrder: "PO-7738",
-    owner: "Supply Chain",
-    status: "awaiting_approval",
-    requiredApprover: "Head of Finance",
-  },
-  {
-    id: "INV-1057",
-    supplier: "Vertex Consulting Group",
-    amount: 73500,
-    currency: "GBP",
-    purchaseOrder: "PO-7744",
-    owner: "Transformation",
-    status: "blocked",
-    blockedReason: "Invoice value exceeds the £50,000 delegated authority threshold and requires CFO approval before progression.",
-    requiredApprover: "CFO",
-  },
-];
-
-type ObservationQueue = Pick<ApprovalQueue, "authorizeObservation" | "submitAction"> &
+type ObservationQueue = Pick<ApprovalQueue, "authorizeObservation"> &
   Partial<{ [Symbol.dispose](): void }>;
-
-type PendingApprovalAction = {
-  invoiceId: string;
-};
-
-async function loadInvoices(storage: DurableObjectStorage): Promise<Invoice[]> {
-  const stored = await storage.get<Invoice[]>(INVOICES_KEY);
-  if (stored) return stored;
-  const seeded = SYNTHETIC_INVOICES.map((invoice) => ({ ...invoice }));
-  await storage.put(INVOICES_KEY, seeded);
-  return seeded;
-}
-
-export async function applyPendingInvoiceApprovalAction(
-  storage: DurableObjectStorage,
-  action: number,
-): Promise<void> {
-  const pending = await storage.get<PendingApprovalAction>(`${ACTION_PREFIX}${action}`);
-  if (!pending) throw new Error(`Unknown invoice approval action ${action}.`);
-
-  const invoices = await loadInvoices(storage);
-  const index = invoices.findIndex((invoice) => invoice.id === pending.invoiceId);
-  if (index < 0) throw new Error(`Invoice ${pending.invoiceId} was not found.`);
-
-  invoices[index] = {
-    ...invoices[index],
-    status: "approved",
-    blockedReason: undefined,
-  };
-  await storage.put(INVOICES_KEY, invoices);
-  await storage.delete(`${ACTION_PREFIX}${action}`);
-}
 
 export function describeCustomVendor(): VendorDescription {
   return {
-    displayName: "Finance Operations",
-    url: "https://github.com/b-als/cloudflare-os-starter",
+    displayName: "Custom Gatekeeper",
+    url: "https://github.com/cloudflare/cloudflare-os-starter",
     logo: CUSTOM_ICON,
-    color: "#eef4ff",
-    tagline: "Inspect invoices and progress governed approvals",
+    color: "#e8f2ff",
+    tagline: "Example organization-specific capability",
     description:
-      "A product-owned enterprise capability demonstrating how Cloudflare OS can inspect business data and request controlled workflow actions without giving the model direct write authority.",
+      "A minimal Gatekeeper to copy when connecting CloudflareOS to your organization's systems.",
     autoProvisionsAccount: true,
     providesAuth: false,
   };
@@ -129,7 +59,7 @@ export function describeCustomVendor(): VendorDescription {
 
 export function describeCustomAccount(): AccountDescription {
   return {
-    displayName: "Synthetic Finance Workspace",
+    displayName: "Custom Gatekeeper",
     avatar: CUSTOM_ICON,
     singleton: { tsType: "CustomSession" },
   };
@@ -138,78 +68,64 @@ export function describeCustomAccount(): AccountDescription {
 @validateRpc()
 export class CustomSessionImpl extends RpcTarget implements CustomSession {
   readonly #approvalQueue: ObservationQueue;
-  readonly #storage: DurableObjectStorage;
+  readonly #info: CustomDeploymentInfo;
 
-  constructor(approvalQueue: ObservationQueue, storage: DurableObjectStorage) {
+  constructor(approvalQueue: ObservationQueue, info: CustomDeploymentInfo) {
     super();
     this.#approvalQueue = approvalQueue;
-    this.#storage = storage;
+    this.#info = info;
   }
 
-  async listPendingInvoices(): Promise<Invoice[]> {
+  async getDeploymentInfo(): Promise<CustomDeploymentInfo> {
     await this.#approvalQueue.authorizeObservation({
-      title: "List pending invoices",
-      description: "Read synthetic invoice records that currently require finance attention.",
+      title: "Read deployment information",
+      description: "Read the custom information configured by this deployment.",
     });
-    const invoices = await loadInvoices(this.#storage);
-    return invoices.filter((invoice) => invoice.status !== "approved");
+    return this.#info;
   }
 
-  async getInvoice(invoiceId: string): Promise<Invoice | null> {
+  async getBusinessAnalysisSchemaV1(): Promise<BusinessAnalysisSchemaBundleV1> {
     await this.#approvalQueue.authorizeObservation({
-      title: `Read invoice ${invoiceId}`,
-      description: `Read the synthetic finance record and workflow state for invoice ${invoiceId}.`,
+      title: "Read business analysis schema",
+      description: "Read the v1 JSON schemas for requirements, conflict registers, and process graphs.",
     });
-    const invoices = await loadInvoices(this.#storage);
-    return invoices.find((invoice) => invoice.id === invoiceId) ?? null;
+    return BUSINESS_ANALYSIS_SCHEMA_V1;
   }
 
-  async explainBlockedInvoice(invoiceId: string): Promise<string> {
+  async getBusinessAnalysisSchemaV11(): Promise<BusinessAnalysisSchemaBundleV11> {
     await this.#approvalQueue.authorizeObservation({
-      title: `Explain invoice ${invoiceId}`,
-      description: `Read the deterministic workflow reason affecting invoice ${invoiceId}.`,
-    });
-    const invoices = await loadInvoices(this.#storage);
-    const invoice = invoices.find((candidate) => candidate.id === invoiceId);
-    if (!invoice) return `Invoice ${invoiceId} was not found.`;
-    if (invoice.status === "approved") return `${invoiceId} is already approved.`;
-    if (invoice.status !== "blocked") {
-      return `${invoiceId} is not blocked. It is awaiting approval from ${invoice.requiredApprover}.`;
-    }
-    return invoice.blockedReason ?? `${invoiceId} is blocked by finance policy.`;
-  }
-
-  async requestInvoiceApproval(invoiceId: string): Promise<ApprovalRequest> {
-    const invoices = await loadInvoices(this.#storage);
-    const invoice = invoices.find((candidate) => candidate.id === invoiceId);
-    if (!invoice) throw new Error(`Invoice ${invoiceId} was not found.`);
-    if (invoice.status === "approved") throw new Error(`Invoice ${invoiceId} is already approved.`);
-    if (invoice.status === "blocked") {
-      throw new Error(invoice.blockedReason ?? `Invoice ${invoiceId} is blocked by finance policy.`);
-    }
-
-    const actionId = await this.#storage.transaction(async (txn) => {
-      const current = (await txn.get<number>(ACTION_COUNTER_KEY)) ?? 1;
-      await txn.put(ACTION_COUNTER_KEY, current + 1);
-      await txn.put<PendingApprovalAction>(`${ACTION_PREFIX}${current}`, { invoiceId });
-      return current;
-    });
-
-    await this.#approvalQueue.submitAction(actionId, {
-      title: `Progress ${invoiceId} for approval`,
+      title: "Read business analysis schema v1.1",
       description:
-        `Submit **${invoiceId}** from **${invoice.supplier}** for approval by **${invoice.requiredApprover}**.\n\n` +
-        `Amount: **£${invoice.amount.toLocaleString("en-GB")}**\n\n` +
-        `This synthetic action changes the invoice workflow state to approved only after the Cloudflare OS approval queue applies it.`,
-      implementsRevert: false,
-      awaitDecision: true,
+        "Read the v1.1 JSON schemas for requirements, conflicts, process maps, trade-offs, and sign-off packets.",
     });
+    return BUSINESS_ANALYSIS_SCHEMA_V11;
+  }
 
-    return {
-      invoiceId,
-      submitted: true,
-      message: `${invoiceId} has been submitted to the governed approval queue for ${invoice.requiredApprover}.`,
-    };
+  async getWorkflowStudioDemoV11(): Promise<WorkflowStudioDemoV11> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read workflow studio demo v1.1",
+      description:
+        "Read a validated end-to-end BA artifact bundle for workflow viewer and editor integration.",
+    });
+    const errors = validateWorkflowStudioDemoV11(WORKFLOW_STUDIO_DEMO_V11);
+    if (errors.length) {
+      throw new Error(`Workflow studio demo v1.1 is invalid: ${errors.join(" | ")}`);
+    }
+    return WORKFLOW_STUDIO_DEMO_V11;
+  }
+
+  async initialiseBaSession(config: BaSessionConfig): Promise<BaSessionContext> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "Initialise BA Studio session",
+      description: `Initialise a BA ${config.mode} session for project "${config.projectName}" with ${config.stakeholders.length} stakeholder(s).`,
+    });
+    if (!config.projectName || config.projectName.trim().length === 0) {
+      throw new Error("BA session initialisation requires a non-empty projectName.");
+    }
+    if (!["interview", "review", "handoff"].includes(config.mode)) {
+      throw new Error(`Unknown BA session mode: ${config.mode}`);
+    }
+    return createBaSessionContext(config);
   }
 
   [Symbol.dispose](): void {
@@ -221,10 +137,10 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
 export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements Gatekeeper<CustomSession> {
   async describe(): Promise<ResourceDescription> {
     return {
-      url: "product://finance/invoices",
-      title: "Finance invoice workflow",
-      snippet: "Synthetic invoices with governed approval progression.",
-      suggestedBindingName: "FINANCE",
+      url: "custom://deployment-info",
+      title: "Deployment information",
+      snippet: "Organization-specific information supplied by this deployment.",
+      suggestedBindingName: "CUSTOM",
       tsType: "CustomSession",
     };
   }
@@ -238,23 +154,23 @@ export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements G
   }
 
   async startSession(approvalQueue: RpcStub<ApprovalQueue>): Promise<CustomSession> {
-    await loadInvoices(this.ctx.storage);
-    return new CustomSessionImpl(approvalQueue.dup(), this.ctx.storage);
+    return new CustomSessionImpl(approvalQueue.dup(), {
+      name: this.env.CUSTOM_NAME,
+      message: this.env.CUSTOM_MESSAGE,
+    });
   }
 
   async addObserver(_id: string, _user: Fetcher<GatekeeperUserVerifier>): Promise<void> {}
   async removeObserver(_id: string): Promise<void> {}
 
   async applyAction(action: number): Promise<void> {
-    await applyPendingInvoiceApprovalAction(this.ctx.storage, action);
+    throw new Error(`Custom Gatekeeper has no actions (${action}).`);
   }
 
-  async rejectAction(action: number): Promise<void> {
-    await this.ctx.storage.delete(`${ACTION_PREFIX}${action}`);
-  }
+  async rejectAction(_action: number): Promise<void> {}
 
   async revertAction(_action: number): Promise<void> {
-    throw new Error("Synthetic invoice approvals are not reversible in v0.2.");
+    throw new Error("Custom Gatekeeper has no actions to revert.");
   }
 }
 
@@ -273,11 +189,11 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
   }
 
   getGatekeeperClassFor(_url: string): never {
-    throw new Error("Finance Operations has no URL-addressed resources.");
+    throw new Error("Custom Gatekeeper has no URL-addressed resources.");
   }
 
   startResourceConfigurator(_resourceUrlPattern: string): Promise<ResourceConfiguratorFrame> {
-    throw new Error("Finance Operations has no URL-addressed resources.");
+    throw new Error("Custom Gatekeeper has no URL-addressed resources.");
   }
 
   async ensureResources(_resourceUrlPatterns: string[]): Promise<{ url?: string }> {
@@ -287,7 +203,7 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
   async revoke(): Promise<void> {}
 
   reconnect(): Promise<{ url: string }> {
-    throw new Error("Finance Operations is auto-provisioned and has no reconnect flow.");
+    throw new Error("Custom Gatekeeper has no credentials to reconnect.");
   }
 
   async getAuthenticatedEmail(): Promise<string | null> {
@@ -320,7 +236,7 @@ export class GatekeeperVendor extends WorkerEntrypoint<Cloudflare.Env> {
     _callback: Fetcher<GatekeeperConnectCallback>,
     _options?: GatekeeperConnectOptions,
   ): Promise<{ url: string }> {
-    throw new Error("Finance Operations is auto-provisioned and has no connect flow.");
+    throw new Error("Custom Gatekeeper is auto-provisioned and has no connect flow.");
   }
 
   async getSupportedResources(_options?: { userId?: string }): Promise<SupportedResource[]> {

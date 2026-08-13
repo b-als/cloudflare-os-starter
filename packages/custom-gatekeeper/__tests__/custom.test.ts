@@ -1,172 +1,518 @@
 import { describe, expect, it } from "vitest";
 import {
   CustomSessionImpl,
-  applyPendingInvoiceApprovalAction,
   describeCustomAccount,
   describeCustomVendor,
 } from "../src/custom.js";
-import TYPES_CODE from "../src/types-code.js";
-
-class MemoryDurableObjectStorage {
-  readonly #map = new Map<string, unknown>();
-
-  async get<T>(key: string): Promise<T | undefined> {
-    const value = this.#map.get(key);
-    return value === undefined ? undefined : structuredClone(value) as T;
-  }
-
-  async put<T>(key: string, value: T): Promise<void> {
-    this.#map.set(key, structuredClone(value));
-  }
-
-  async delete(key: string): Promise<boolean> {
-    return this.#map.delete(key);
-  }
-
-  async transaction<T>(callback: (txn: {
-    get<U>(key: string): Promise<U | undefined>;
-    put<U>(key: string, value: U): Promise<void>;
-  }) => Promise<T>): Promise<T> {
-    return callback({
-      get: this.get.bind(this),
-      put: this.put.bind(this),
-    });
-  }
-}
-
-function createSession() {
-  const observations: { title: string; description: string }[] = [];
-  const actions: {
-    action: number;
-    description: {
-      title: string;
-      description: string;
-      implementsRevert: boolean;
-      awaitDecision?: boolean;
-    };
-  }[] = [];
-  const storage = new MemoryDurableObjectStorage();
-  const queue = {
-    async authorizeObservation(observation: { title: string; description: string }) {
-      observations.push(observation);
-    },
-    async submitAction(action: number, description: {
-      title: string;
-      description: string;
-      implementsRevert: boolean;
-      awaitDecision?: boolean;
-    }) {
-      actions.push({ action, description });
-    },
-  };
-  const session = new CustomSessionImpl(
-    queue,
-    storage as unknown as DurableObjectStorage,
-  );
-  return { session, storage, observations, actions };
-}
+import {
+  BUSINESS_ANALYSIS_SCHEMA_V1,
+  BUSINESS_ANALYSIS_SCHEMA_V11,
+  validateConflictRegisterArtifactV1,
+  validateConflictRegisterArtifactV11,
+  validateProcessGraphArtifactV1,
+  validateProcessGraphArtifactV11,
+  validateRequirementsArtifactV1,
+  validateRequirementsArtifactV11,
+  validateSignoffPacketArtifactV11,
+  validateTradeoffRegisterArtifactV11,
+} from "../src/ba-schema.js";
+import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "../src/workflow-demo.js";
+import { createBaSessionContext, getBaSessionCatalogEntry } from "../src/ba-session.js";
 
 describe("custom-gatekeeper", () => {
-  it("describes the finance capability as an auto-provisioned singleton", () => {
+  it("describes an auto-provisioned singleton", () => {
     expect(describeCustomVendor()).toMatchObject({
-      displayName: "Finance Operations",
+      displayName: "Custom Gatekeeper",
       autoProvisionsAccount: true,
       providesAuth: false,
     });
     expect(describeCustomAccount()).toMatchObject({
-      displayName: "Synthetic Finance Workspace",
+      displayName: "Custom Gatekeeper",
       singleton: { tsType: "CustomSession" },
     });
   });
 
-  it("exposes governed invoice operations to the agent", () => {
-    expect(TYPES_CODE).toContain("listPendingInvoices");
-    expect(TYPES_CODE).toContain("getInvoice");
-    expect(TYPES_CODE).toContain("explainBlockedInvoice");
-    expect(TYPES_CODE).toContain("requestInvoiceApproval");
-    expect(TYPES_CODE).not.toContain("approveInvoice():");
-  });
-
-  it("lists deterministic synthetic invoices requiring attention", async () => {
-    const { session } = createSession();
-    const invoices = await session.listPendingInvoices();
-
-    expect(invoices.map((invoice) => invoice.id)).toEqual([
-      "INV-1042",
-      "INV-1048",
-      "INV-1051",
-      "INV-1057",
-    ]);
-    expect(invoices.every((invoice) => invoice.status !== "approved")).toBe(true);
-  });
-
-  it("retrieves an individual invoice and handles unknown ids", async () => {
-    const { session } = createSession();
-    const invoice = await session.getInvoice("INV-1042");
-    const missing = await session.getInvoice("INV-9999");
-
-    expect(invoice?.id).toBe("INV-1042");
-    expect(invoice?.status).toBe("awaiting_approval");
-    expect(missing).toBeNull();
-  });
-
-  it("explains blocked reasons deterministically", async () => {
-    const { session } = createSession();
-
-    await expect(session.explainBlockedInvoice("INV-1048"))
-      .resolves
-      .toContain("No purchase order is attached.");
-    await expect(session.explainBlockedInvoice("INV-1042"))
-      .resolves
-      .toContain("not blocked");
-    await expect(session.explainBlockedInvoice("INV-9999"))
-      .resolves
-      .toContain("was not found");
-  });
-
-  it("submits governed actions without mutating invoice state before approval", async () => {
-    const { session, actions } = createSession();
-
-    const request = await session.requestInvoiceApproval("INV-1042");
-    const beforeApply = await session.getInvoice("INV-1042");
-
-    expect(request).toMatchObject({
-      invoiceId: "INV-1042",
-      submitted: true,
-    });
-    expect(beforeApply?.status).toBe("awaiting_approval");
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({
-      action: 1,
-      description: {
-        title: "Progress INV-1042 for approval",
-        implementsRevert: false,
-        awaitDecision: true,
+  it("authorizes the observation before returning deployment information", async () => {
+    let observation: unknown;
+    let disposed = false;
+    const session = new CustomSessionImpl(
+      {
+        authorizeObservation(value: unknown) {
+          observation = value;
+          return Promise.resolve();
+        },
+        [Symbol.dispose]() {
+          disposed = true;
+        },
       },
+      { name: "Acme", message: "Use the internal handbook." },
+    );
+
+    await expect(session.getDeploymentInfo()).resolves.toEqual({
+      name: "Acme",
+      message: "Use the internal handbook.",
+    });
+    expect(observation).toEqual({
+      title: "Read deployment information",
+      description: "Read the custom information configured by this deployment.",
+    });
+
+    session[Symbol.dispose]();
+    expect(disposed).toBe(true);
+  });
+
+  it("returns the business analysis schema bundle after recording an observation", async () => {
+    let observation: unknown;
+    const session = new CustomSessionImpl(
+      {
+        authorizeObservation(value: unknown) {
+          observation = value;
+          return Promise.resolve();
+        },
+      },
+      { name: "Acme", message: "Use the internal handbook." },
+    );
+
+    await expect(session.getBusinessAnalysisSchemaV1()).resolves.toEqual(BUSINESS_ANALYSIS_SCHEMA_V1);
+    expect(observation).toEqual({
+      title: "Read business analysis schema",
+      description: "Read the v1 JSON schemas for requirements, conflict registers, and process graphs.",
     });
   });
 
-  it("applies submitted actions only when approval path calls applyAction", async () => {
-    const { session, storage } = createSession();
-    await session.requestInvoiceApproval("INV-1042");
+  it("returns the business analysis schema v1.1 bundle after recording an observation", async () => {
+    let observation: unknown;
+    const session = new CustomSessionImpl(
+      {
+        authorizeObservation(value: unknown) {
+          observation = value;
+          return Promise.resolve();
+        },
+      },
+      { name: "Acme", message: "Use the internal handbook." },
+    );
 
-    await applyPendingInvoiceApprovalAction(storage as unknown as DurableObjectStorage, 1);
-
-    const invoice = await session.getInvoice("INV-1042");
-    const pending = await session.listPendingInvoices();
-    expect(invoice?.status).toBe("approved");
-    expect(pending.map((item) => item.id)).not.toContain("INV-1042");
+    await expect(session.getBusinessAnalysisSchemaV11()).resolves.toEqual(BUSINESS_ANALYSIS_SCHEMA_V11);
+    expect(observation).toEqual({
+      title: "Read business analysis schema v1.1",
+      description:
+        "Read the v1.1 JSON schemas for requirements, conflicts, process maps, trade-offs, and sign-off packets.",
+    });
   });
 
-  it("rejects unknown invoices and unknown action ids", async () => {
-    const { session, storage } = createSession();
+  it("returns the workflow studio demo v1.1 bundle after validation and observation", async () => {
+    let observation: unknown;
+    const session = new CustomSessionImpl(
+      {
+        authorizeObservation(value: unknown) {
+          observation = value;
+          return Promise.resolve();
+        },
+      },
+      { name: "Acme", message: "Use the internal handbook." },
+    );
 
-    await expect(session.requestInvoiceApproval("INV-9999")).rejects.toThrow("was not found");
-    await expect(session.requestInvoiceApproval("INV-1048"))
-      .rejects
-      .toThrow("No purchase order is attached.");
-    await expect(applyPendingInvoiceApprovalAction(storage as unknown as DurableObjectStorage, 404))
-      .rejects
-      .toThrow("Unknown invoice approval action 404.");
+    await expect(session.getWorkflowStudioDemoV11()).resolves.toEqual(WORKFLOW_STUDIO_DEMO_V11);
+    expect(observation).toEqual({
+      title: "Read workflow studio demo v1.1",
+      description:
+        "Read a validated end-to-end BA artifact bundle for workflow viewer and editor integration.",
+    });
+  });
+
+  it("validates requirements, conflicts, and process graph artifacts", () => {
+    const requirements = {
+      schemaVersion: "requirements/v1" as const,
+      processId: "proc-1",
+      generatedAt: "2026-08-13T00:00:00.000Z",
+      stakeholders: [
+        { id: "st-ops", name: "Operations", role: "process-owner" },
+        { id: "st-risk", name: "Risk", role: "approver" },
+      ],
+      requirements: [
+        {
+          id: "req-1",
+          title: "Capture request",
+          category: "functional" as const,
+          statement: "Capture incoming request details.",
+          acceptanceCriteria: ["Request id generated", "Requester authenticated"],
+          priority: "must" as const,
+          ownerStakeholderId: "st-ops",
+        },
+        {
+          id: "req-2",
+          title: "Approval route",
+          category: "compliance" as const,
+          statement: "Route high-risk requests to approver.",
+          acceptanceCriteria: ["Approver decision recorded"],
+          priority: "should" as const,
+          ownerStakeholderId: "st-risk",
+          dependencies: ["req-1"],
+        },
+      ],
+    };
+    expect(validateRequirementsArtifactV1(requirements)).toEqual([]);
+
+    const conflicts = {
+      schemaVersion: "conflicts/v1" as const,
+      processId: "proc-1",
+      conflicts: [
+        {
+          id: "conf-1",
+          summary: "Ops wants speed, risk wants additional checks.",
+          requirementIds: ["req-1", "req-2"],
+          stakeholderIds: ["st-ops", "st-risk"],
+          impact: "timeline" as const,
+          decision: { status: "inReview" as const },
+        },
+      ],
+    };
+    expect(validateConflictRegisterArtifactV1(conflicts, { requirements })).toEqual([]);
+
+    const graph = {
+      schemaVersion: "process-graph/v1" as const,
+      processId: "proc-1",
+      nodes: [
+        { id: "n-start", type: "trigger" as const, label: "Request received" },
+        { id: "n-check", type: "decision" as const, label: "High risk?" },
+        { id: "n-fast", type: "task" as const, label: "Auto route" },
+        { id: "n-approve", type: "approval" as const, label: "Manual approval" },
+        { id: "n-end", type: "end" as const, label: "Completed" },
+      ],
+      edges: [
+        { id: "e-1", source: "n-start", target: "n-check" },
+        { id: "e-2", source: "n-check", target: "n-fast", condition: "no" },
+        { id: "e-3", source: "n-check", target: "n-approve", condition: "yes" },
+        { id: "e-4", source: "n-fast", target: "n-end" },
+        { id: "e-5", source: "n-approve", target: "n-end" },
+      ],
+    };
+    expect(validateProcessGraphArtifactV1(graph)).toEqual([]);
+  });
+
+  it("reports graph and dependency errors for broken artifacts", () => {
+    const brokenRequirements = {
+      schemaVersion: "requirements/v1" as const,
+      processId: "proc-2",
+      generatedAt: "2026-08-13T00:00:00.000Z",
+      stakeholders: [{ id: "st-1", name: "Ops", role: "owner" }],
+      requirements: [
+        {
+          id: "req-a",
+          title: "A",
+          category: "functional" as const,
+          statement: "A",
+          acceptanceCriteria: ["A"],
+          priority: "must" as const,
+          ownerStakeholderId: "unknown",
+          dependencies: ["req-missing"],
+        },
+      ],
+    };
+    expect(validateRequirementsArtifactV1(brokenRequirements)).toEqual([
+      "requirement req-a references unknown ownerStakeholderId unknown",
+      "requirement req-a references unknown dependency req-missing",
+    ]);
+
+    const brokenGraph = {
+      schemaVersion: "process-graph/v1" as const,
+      processId: "proc-2",
+      nodes: [
+        { id: "n1", type: "decision" as const, label: "Branch?" },
+        { id: "n1", type: "end" as const, label: "Done" },
+      ],
+      edges: [{ id: "e1", source: "n1", target: "n-missing" }],
+    };
+    expect(validateProcessGraphArtifactV1(brokenGraph)).toEqual([
+      "duplicate node id: n1",
+      "edge e1 references unknown target node n-missing",
+      "process graph must contain at least one trigger node.",
+      "decision node n1 must have at least two outgoing edges.",
+      "decision node n1 requires a condition on each outgoing edge.",
+    ]);
+  });
+
+  it("validates v1.1 requirements, conflicts, graph, trade-offs, and sign-off artifacts", () => {
+    const requirementsV11 = {
+      schemaVersion: "requirements/v1.1" as const,
+      processId: "proc-11",
+      generatedAt: "2026-08-13T00:00:00.000Z",
+      stakeholders: [
+        { id: "st-ops", name: "Operations", role: "process-owner" },
+        { id: "st-risk", name: "Risk", role: "approver" },
+        { id: "st-tech", name: "Technology", role: "delivery-lead" },
+      ],
+      requirements: [
+        {
+          id: "req-11-1",
+          title: "Capture request",
+          category: "functional" as const,
+          statement: "Capture inbound request.",
+          acceptanceCriteria: ["Request saved"],
+          priority: "must" as const,
+          ownerStakeholderId: "st-ops",
+          sourceStakeholderIds: ["st-ops"],
+          fitCriterion: "Captured in less than 2 minutes.",
+          benefitHypothesis: "Reduced intake errors.",
+        },
+        {
+          id: "req-11-2",
+          title: "Risk review",
+          category: "compliance" as const,
+          statement: "Escalate high-risk cases.",
+          acceptanceCriteria: ["Review decision logged"],
+          priority: "should" as const,
+          ownerStakeholderId: "st-risk",
+          sourceStakeholderIds: ["st-risk", "st-ops"],
+          fitCriterion: "All high-risk cases reviewed.",
+          benefitHypothesis: "Lower compliance breaches.",
+          dependencies: ["req-11-1"],
+        },
+      ],
+      raci: [
+        {
+          activityId: "act-intake",
+          responsible: ["st-ops"],
+          accountable: "st-tech",
+          consulted: ["st-risk"],
+          informed: ["st-ops"],
+        },
+      ],
+      decisionLog: [
+        {
+          id: "dec-1",
+          summary: "Use risk-based routing.",
+          rationale: "Balances speed and control.",
+          requirementIds: ["req-11-1", "req-11-2"],
+          ownerStakeholderId: "st-risk",
+          status: "approved" as const,
+        },
+      ],
+    };
+    expect(validateRequirementsArtifactV11(requirementsV11)).toEqual([]);
+
+    const conflictsV11 = {
+      schemaVersion: "conflicts/v1.1" as const,
+      processId: "proc-11",
+      conflicts: [
+        {
+          id: "conf-11-1",
+          summary: "Auto-approve vs manual review threshold.",
+          requirementIds: ["req-11-1", "req-11-2"],
+          stakeholderIds: ["st-ops", "st-risk"],
+          impact: "risk" as const,
+          resolutionOwnerStakeholderId: "st-risk",
+          decision: { status: "inReview" as const },
+        },
+      ],
+    };
+    expect(validateConflictRegisterArtifactV11(conflictsV11, { requirements: requirementsV11 })).toEqual([]);
+
+    const graphV11 = {
+      schemaVersion: "process-graph/v1.1" as const,
+      processId: "proc-11",
+      nodes: [
+        { id: "n-start", type: "trigger" as const, label: "Request received", swimlaneStakeholderId: "st-ops" },
+        { id: "n-decision", type: "decision" as const, label: "High risk?", swimlaneStakeholderId: "st-risk" },
+        { id: "n-fast", type: "task" as const, label: "Fast lane", swimlaneStakeholderId: "st-ops", slaHours: 2 },
+        { id: "n-review", type: "approval" as const, label: "Risk review", swimlaneStakeholderId: "st-risk", slaHours: 8 },
+        { id: "n-end", type: "end" as const, label: "Completed", swimlaneStakeholderId: "st-tech" },
+      ],
+      edges: [
+        { id: "e-1", source: "n-start", target: "n-decision" },
+        { id: "e-2", source: "n-decision", target: "n-fast", condition: "no" },
+        { id: "e-3", source: "n-decision", target: "n-review", condition: "yes" },
+        { id: "e-4", source: "n-fast", target: "n-end" },
+        { id: "e-5", source: "n-review", target: "n-end" },
+      ],
+    };
+    expect(validateProcessGraphArtifactV11(graphV11, { requirements: requirementsV11 })).toEqual([]);
+
+    const tradeoffsV11 = {
+      schemaVersion: "tradeoffs/v1.1" as const,
+      processId: "proc-11",
+      preferredOptionId: "opt-balanced",
+      options: [
+        {
+          id: "opt-fast",
+          title: "Speed-first",
+          summary: "Minimal review checks.",
+          scores: { userValue: 5, deliveryEffort: 2, operationalRisk: 2, complianceFit: 2 },
+          impacts: { scope: "low" as const, cost: "low" as const, timeline: "low" as const, risk: "high" as const },
+        },
+        {
+          id: "opt-balanced",
+          title: "Balanced",
+          summary: "Risk-based decision gate.",
+          scores: { userValue: 4, deliveryEffort: 3, operationalRisk: 4, complianceFit: 5 },
+          impacts: { scope: "medium" as const, cost: "medium" as const, timeline: "medium" as const, risk: "low" as const },
+        },
+      ],
+    };
+    expect(validateTradeoffRegisterArtifactV11(tradeoffsV11)).toEqual([]);
+
+    const signoffV11 = {
+      schemaVersion: "signoff/v1.1" as const,
+      processId: "proc-11",
+      baselineVersion: "baseline-1",
+      approvedAt: "2026-08-13T00:00:00.000Z",
+      approvers: [
+        { stakeholderId: "st-risk", role: "Risk Owner", decision: "approved" as const },
+        { stakeholderId: "st-tech", role: "Delivery Lead", decision: "approvedWithConditions" as const, note: "Monitor SLA in first month" },
+      ],
+    };
+    expect(validateSignoffPacketArtifactV11(signoffV11, { requirements: requirementsV11 })).toEqual([]);
+  });
+
+  it("reports v1.1 governance and traceability validation errors", () => {
+    const invalidRequirementsV11 = {
+      schemaVersion: "requirements/v1.1" as const,
+      processId: "proc-bad",
+      generatedAt: "2026-08-13T00:00:00.000Z",
+      stakeholders: [{ id: "st-1", name: "Ops", role: "owner" }],
+      requirements: [
+        {
+          id: "req-a",
+          title: "A",
+          category: "functional" as const,
+          statement: "A",
+          acceptanceCriteria: ["A"],
+          priority: "must" as const,
+          ownerStakeholderId: "st-missing",
+          sourceStakeholderIds: ["st-missing"],
+          fitCriterion: "A",
+          benefitHypothesis: "A",
+          dependencies: ["req-missing"],
+        },
+      ],
+      raci: [
+        {
+          activityId: "act-1",
+          responsible: ["st-missing"],
+          accountable: "st-missing",
+          consulted: [],
+          informed: [],
+        },
+      ],
+      decisionLog: [
+        {
+          id: "dec-1",
+          summary: "X",
+          rationale: "Y",
+          requirementIds: ["req-unknown"],
+          ownerStakeholderId: "st-missing",
+          status: "proposed" as const,
+        },
+      ],
+    };
+    expect(validateRequirementsArtifactV11(invalidRequirementsV11)).toEqual([
+      "requirement req-a references unknown ownerStakeholderId st-missing",
+      "requirement req-a references unknown source stakeholder st-missing",
+      "requirement req-a references unknown dependency req-missing",
+      "RACI activity act-1 references unknown accountable st-missing",
+      "RACI activity act-1 references unknown stakeholder st-missing",
+      "decision dec-1 references unknown ownerStakeholderId st-missing",
+      "decision dec-1 references unknown requirement req-unknown",
+    ]);
+
+    const invalidTradeoffsV11 = {
+      schemaVersion: "tradeoffs/v1.1" as const,
+      processId: "proc-bad",
+      preferredOptionId: "opt-x",
+      options: [{ id: "opt-a", title: "A", summary: "A", scores: { userValue: 3, deliveryEffort: 3, operationalRisk: 3, complianceFit: 3 }, impacts: { scope: "low" as const, cost: "low" as const, timeline: "low" as const, risk: "low" as const } }],
+    };
+    expect(validateTradeoffRegisterArtifactV11(invalidTradeoffsV11)).toEqual([
+      "preferredOptionId opt-x does not match any trade-off option id.",
+    ]);
+  });
+
+  it("validates the workflow studio demo contract", () => {
+    expect(validateWorkflowStudioDemoV11(WORKFLOW_STUDIO_DEMO_V11)).toEqual([]);
+  });
+
+  describe("BA session initialisation", () => {
+    const makeQueue = () => ({
+      authorizeObservation(_obs: unknown) { return Promise.resolve(); },
+    });
+
+    it("creates a BA interview session context with system prompt and opening message", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const ctx = await session.initialiseBaSession({
+        projectName: "Customer Onboarding Redesign",
+        stakeholders: [
+          { name: "Alice", role: "Product Owner" },
+          { name: "Bob", role: "Risk Manager" },
+        ],
+        mode: "interview",
+      });
+      expect(ctx.config.projectName).toBe("Customer Onboarding Redesign");
+      expect(ctx.config.mode).toBe("interview");
+      expect(ctx.agentSystemPrompt).toContain("BA Studio");
+      expect(ctx.agentSystemPrompt).toContain("Customer Onboarding Redesign");
+      expect(ctx.agentSystemPrompt).toContain("Alice");
+      expect(ctx.agentSystemPrompt).toContain("Bob");
+      expect(ctx.agentOpeningMessage).toContain("Customer Onboarding Redesign");
+      expect(ctx.initialisedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it("creates a BA review session context", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const ctx = await session.initialiseBaSession({
+        projectName: "Risk Review Portal",
+        stakeholders: [{ name: "Carol", role: "Compliance Lead" }],
+        mode: "review",
+      });
+      expect(ctx.agentSystemPrompt).toContain("review");
+      expect(ctx.agentOpeningMessage).toContain("review phase");
+    });
+
+    it("creates a BA handoff session context", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const ctx = await session.initialiseBaSession({
+        projectName: "Payments Modernisation",
+        stakeholders: [],
+        mode: "handoff",
+      });
+      expect(ctx.agentSystemPrompt).toContain("Workflow Handoff");
+      expect(ctx.agentOpeningMessage).toContain("approved");
+    });
+
+    it("rejects an empty project name", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      await expect(
+        session.initialiseBaSession({ projectName: "  ", stakeholders: [], mode: "interview" }),
+      ).rejects.toThrow("non-empty projectName");
+    });
+
+    it("rejects an unknown session mode", () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      // capnweb-validate rejects invalid union values synchronously before the method body runs.
+      expect(() =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        session.initialiseBaSession({ projectName: "X", stakeholders: [], mode: "unknown" as any }),
+      ).toThrow();
+    });
+
+    it("builds catalog entries for discovery", () => {
+      const entry = getBaSessionCatalogEntry({
+        projectName: "My Project",
+        stakeholders: [{ name: "Alice", role: "PO" }],
+        mode: "interview",
+      });
+      expect(entry.id).toBe("ba-session:my-project");
+      expect(entry.title).toContain("My Project");
+      expect(entry.title).toContain("Requirements Interview");
+      expect(entry.description).toContain("Alice");
+    });
+
+    it("createBaSessionContext includes domain context in the system prompt", () => {
+      const ctx = createBaSessionContext({
+        projectName: "Claims Automation",
+        stakeholders: [],
+        mode: "interview",
+        domainContext: "UK motor insurance, FCA regulated.",
+      });
+      expect(ctx.agentSystemPrompt).toContain("UK motor insurance");
+    });
   });
 });
