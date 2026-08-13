@@ -24,9 +24,9 @@
   // "admins" gates /admin in every sign-in method.
   // Reference: docs/customization.md#sign-in-methods
   "access": {
-    "issuer": "https://example.cloudflareaccess.com",
-    "audience": "ba-studio-eval-audience",
-    "admins": ["b.als@outlook.com"]
+    "issuer": "<CLOUDFLARE_ACCESS_ISSUER>",
+    "audience": "<CLOUDFLARE_ACCESS_AUDIENCE>",
+    "admins": ["<ADMIN_EMAIL>"]
   },
 
   // Optional platform-funded model catalog. Leave disabled to deploy without AI setup.
