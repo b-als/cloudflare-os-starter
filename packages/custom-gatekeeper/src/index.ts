@@ -3,6 +3,8 @@ export * from "./ba-schema.js";
 export * from "./ba-session.js";
 export * from "./workflow-demo.js";
 export * from "./ba-project-store.js";
+export * from "./workflow-run.js";
+export * from "./workflow-run-store.js";
 
 export default {
   async fetch(): Promise<Response> {

@@ -25,6 +25,8 @@ import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "./workf
 import { createBaSessionContext } from "./ba-session.js";
 import { BaUiApiImpl } from "./ba-ui-api.js";
 import type { BaProjectDurableObject } from "./ba-project-store.js";
+import type { WorkflowRunDurableObject } from "./workflow-run-store.js";
+import { advanceRun, assertSignedOff, buildNewRun } from "./workflow-run.js";
 import type {
   BaProjectRecord,
   BaSessionConfig,
@@ -33,6 +35,7 @@ import type {
   BusinessAnalysisSchemaBundleV11,
   CustomDeploymentInfo,
   CustomSession,
+  WorkflowRunRecordV1,
   WorkflowStudioDemoV11,
 } from "./types.js";
 import TYPES_CODE from "./types-code.js";
@@ -89,16 +92,19 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
   readonly #approvalQueue: ObservationQueue;
   readonly #info: CustomDeploymentInfo;
   readonly #baProjects: DurableObjectNamespace<BaProjectDurableObject>;
+  readonly #workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>;
 
   constructor(
     approvalQueue: ObservationQueue,
     info: CustomDeploymentInfo,
     baProjects: DurableObjectNamespace<BaProjectDurableObject>,
+    workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>,
   ) {
     super();
     this.#approvalQueue = approvalQueue;
     this.#info = info;
     this.#baProjects = baProjects;
+    this.#workflowRuns = workflowRuns;
   }
 
   async getDeploymentInfo(): Promise<CustomDeploymentInfo> {
@@ -173,6 +179,67 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
     return stub.saveBundle(processId, bundle);
   }
 
+  async startWorkflowRun(processId: string, note?: string): Promise<WorkflowRunRecordV1> {
+    validateProcessId(processId);
+    const projectStub = this.#baProjects.get(this.#baProjects.idFromName(processId));
+    const record = await projectStub.getRecord();
+    if (!record) {
+      throw new Error(`No saved BA Studio project found for "${processId}".`);
+    }
+    assertSignedOff(record.bundle.signoffPacket);
+    await this.#approvalQueue.authorizeObservation({
+      title: "Start workflow run",
+      description: `Start executing the signed-off process graph for BA Studio project "${processId}" (baseline ${record.bundle.signoffPacket.baselineVersion}).`,
+    });
+    const run = buildNewRun(processId, record.bundle.processGraph, record.bundle.signoffPacket.baselineVersion, note);
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    return runsStub.putRun(run);
+  }
+
+  async advanceWorkflowRun(
+    processId: string,
+    runId: string,
+    input: { condition?: string; approvalDecision?: "approved" | "rejected"; note?: string },
+  ): Promise<WorkflowRunRecordV1> {
+    validateProcessId(processId);
+    await this.#approvalQueue.authorizeObservation({
+      title: "Advance workflow run",
+      description: `Resolve the pending step of workflow run "${runId}" for BA Studio project "${processId}".`,
+    });
+    const projectStub = this.#baProjects.get(this.#baProjects.idFromName(processId));
+    const record = await projectStub.getRecord();
+    if (!record) {
+      throw new Error(`No saved BA Studio project found for "${processId}".`);
+    }
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    const run = await runsStub.getRun(runId);
+    if (!run) {
+      throw new Error(`Workflow run "${runId}" not found for project "${processId}".`);
+    }
+    const advanced = advanceRun(run, record.bundle.processGraph, input);
+    return runsStub.putRun(advanced);
+  }
+
+  async getWorkflowRun(processId: string, runId: string): Promise<WorkflowRunRecordV1 | null> {
+    validateProcessId(processId);
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read workflow run",
+      description: `Read workflow run "${runId}" for BA Studio project "${processId}".`,
+    });
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    return runsStub.getRun(runId);
+  }
+
+  async listWorkflowRuns(processId: string): Promise<WorkflowRunRecordV1[]> {
+    validateProcessId(processId);
+    await this.#approvalQueue.authorizeObservation({
+      title: "List workflow runs",
+      description: `List all workflow runs recorded for BA Studio project "${processId}".`,
+    });
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    return runsStub.listRuns();
+  }
+
   [Symbol.dispose](): void {
     this.#approvalQueue[Symbol.dispose]?.();
   }
@@ -206,6 +273,7 @@ export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements G
         message: this.env.CUSTOM_MESSAGE,
       },
       this.ctx.exports.BaProjectDurableObject,
+      this.ctx.exports.WorkflowRunDurableObject,
     );
   }
 
@@ -235,7 +303,9 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
 
   async startAppUi(context: AppUiContext): Promise<GatekeeperUiFrame> {
     // Hand the sandboxed BA Studio iframe its own capability. isAdmin is supplied fresh per open.
-    const ui = new RpcStub(new BaUiApiImpl(context.isAdmin, this.ctx.exports.BaProjectDurableObject));
+    const ui = new RpcStub(
+      new BaUiApiImpl(context.isAdmin, this.ctx.exports.BaProjectDurableObject, this.ctx.exports.WorkflowRunDurableObject),
+    );
     return { iframeHtml: APP_HTML, ui };
   }
 

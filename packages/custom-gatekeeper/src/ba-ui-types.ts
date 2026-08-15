@@ -6,7 +6,12 @@
  * can resolve it directly.
  */
 
-import type { BaProjectRecord, StakeholderSuggestionV11, WorkflowStudioDemoV11 } from "./types.js";
+import type {
+  BaProjectRecord,
+  StakeholderSuggestionV11,
+  WorkflowRunRecordV1,
+  WorkflowStudioDemoV11,
+} from "./types.js";
 
 /** RPC capability handed to the BA Studio sandboxed iframe via `startAppUi()`. */
 export interface BaUiApi {
@@ -29,4 +34,24 @@ export interface BaUiApi {
    * stakeholder roles. Purely advisory -- a human decides whether to act.
    */
   getStakeholderSuggestions(bundle: WorkflowStudioDemoV11): Promise<StakeholderSuggestionV11[]>;
+
+  /**
+   * Starts a new workflow run from the project's signed-off process graph.
+   * Throws if the project has no saved bundle, or its sign-off packet has
+   * no approved decision.
+   */
+  startWorkflowRun(processId: string, note?: string): Promise<WorkflowRunRecordV1>;
+
+  /** Resolves a `waitingForInput` run's pending decision/approval node and continues it. */
+  advanceWorkflowRun(
+    processId: string,
+    runId: string,
+    input: { condition?: string; approvalDecision?: "approved" | "rejected"; note?: string },
+  ): Promise<WorkflowRunRecordV1>;
+
+  /** Returns a single workflow run, or null if it does not exist. */
+  getWorkflowRun(processId: string, runId: string): Promise<WorkflowRunRecordV1 | null>;
+
+  /** Lists all workflow runs recorded for a project, most recent first. */
+  listWorkflowRuns(processId: string): Promise<WorkflowRunRecordV1[]>;
 }

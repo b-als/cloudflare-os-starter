@@ -227,6 +227,54 @@ export interface WorkflowStudioDemoV11 {
   };
 }
 
+/** Status of a single process-graph node once a workflow run reaches it. */
+export type WorkflowStepStatus =
+  | "completed"
+  | "skipped"
+  | "waitingForDecision"
+  | "waitingForApproval"
+  | "failed";
+
+/** Record of one process-graph node's execution within a workflow run. */
+export interface WorkflowStepRecordV1 {
+  nodeId: string;
+  label: string;
+  type: "trigger" | "task" | "decision" | "integration" | "approval" | "end";
+  status: WorkflowStepStatus;
+  enteredAt: string;
+  resolvedAt?: string;
+  /** For decision nodes: the edge condition chosen, once resolved. */
+  chosenCondition?: string;
+  /** For approval nodes: the human decision recorded, once resolved. */
+  approvalDecision?: "approved" | "rejected";
+  note?: string;
+}
+
+/** Overall status of a workflow run. */
+export type WorkflowRunStatus = "running" | "waitingForInput" | "completed" | "failed";
+
+/**
+ * A durable, auditable execution of one BA Studio process's `processGraph`.
+ * This is a *simulated* run: nodes complete automatically except `decision`
+ * (needs a chosen edge condition) and `approval` (needs a human yes/no),
+ * both supplied via `advanceWorkflowRun`. No gatekeeper/integration is
+ * actually invoked yet -- this proves out the execution/audit-trail shape
+ * ahead of wiring real actions to `task`/`integration` nodes.
+ */
+export interface WorkflowRunRecordV1 {
+  runId: string;
+  processId: string;
+  baselineVersion: string;
+  status: WorkflowRunStatus;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  startedByNote?: string;
+  steps: WorkflowStepRecordV1[];
+  /** Node id currently awaiting a decision or approval, if `status` is `waitingForInput`. */
+  pendingNodeId?: string;
+}
+
 /** BA Studio session mode. */
 export type BaSessionMode = "interview" | "review" | "handoff";
 
@@ -287,4 +335,30 @@ export interface CustomSession {
    * projects scale independently of one another.
    */
   saveBaProject(processId: string, bundle: WorkflowStudioDemoV11): Promise<BaProjectRecord>;
+
+  /**
+   * Starts a new workflow run from the signed-off `processGraph` for a BA
+   * Studio project. Requires the project's current `signoffPacket` to have
+   * at least one approver whose decision is `approved` or
+   * `approvedWithConditions` -- rejects otherwise. Returns the new run's
+   * durable, versioned record.
+   */
+  startWorkflowRun(processId: string, note?: string): Promise<WorkflowRunRecordV1>;
+
+  /**
+   * Advances a `waitingForInput` workflow run past its pending decision or
+   * approval node, then continues auto-completing subsequent nodes until
+   * the run finishes or reaches the next node needing input.
+   */
+  advanceWorkflowRun(
+    processId: string,
+    runId: string,
+    input: { condition?: string; approvalDecision?: "approved" | "rejected"; note?: string },
+  ): Promise<WorkflowRunRecordV1>;
+
+  /** Returns a single workflow run's current record, or null if it does not exist. */
+  getWorkflowRun(processId: string, runId: string): Promise<WorkflowRunRecordV1 | null>;
+
+  /** Lists all workflow runs recorded for a BA Studio project, most recent first. */
+  listWorkflowRuns(processId: string): Promise<WorkflowRunRecordV1[]>;
 }

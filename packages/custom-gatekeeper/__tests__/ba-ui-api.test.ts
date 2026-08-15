@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { BaUiApiImpl } from "../src/ba-ui-api.js";
 import { validateWorkflowStudioDemoV11 } from "../src/workflow-demo.js";
 import type { BaProjectDurableObject } from "../src/ba-project-store.js";
-import type { BaProjectRecord } from "../src/types.js";
+import type { WorkflowRunDurableObject } from "../src/workflow-run-store.js";
+import type { BaProjectRecord, WorkflowRunRecordV1 } from "../src/types.js";
 
 /** An in-memory fake of the BaProjectDurableObject namespace, keyed by DO name (== processId). */
 function createFakeBaProjects(): DurableObjectNamespace<BaProjectDurableObject> {
@@ -30,19 +31,45 @@ function createFakeBaProjects(): DurableObjectNamespace<BaProjectDurableObject> 
   } as any;
 }
 
+/** An in-memory fake of the WorkflowRunDurableObject namespace, keyed by DO name (== processId). */
+function createFakeWorkflowRuns(): DurableObjectNamespace<WorkflowRunDurableObject> {
+  const runsByProject = new Map<string, WorkflowRunRecordV1[]>();
+  const stubFor = (name: string) => ({
+    async getRun(runId: string): Promise<WorkflowRunRecordV1 | null> {
+      return (runsByProject.get(name) ?? []).find((run) => run.runId === runId) ?? null;
+    },
+    async listRuns(): Promise<WorkflowRunRecordV1[]> {
+      return [...(runsByProject.get(name) ?? [])].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    },
+    async putRun(run: WorkflowRunRecordV1): Promise<WorkflowRunRecordV1> {
+      const existing = runsByProject.get(name) ?? [];
+      const index = existing.findIndex((candidate) => candidate.runId === run.runId);
+      if (index === -1) existing.push(run);
+      else existing[index] = run;
+      runsByProject.set(name, existing);
+      return run;
+    },
+  });
+  return {
+    idFromName: (name: string) => name,
+    get: (name: string) => stubFor(name),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
 describe("BaUiApiImpl", () => {
   it("reports isAdmin as supplied at construction", async () => {
-    const api = new BaUiApiImpl(true, createFakeBaProjects());
+    const api = new BaUiApiImpl(true, createFakeBaProjects(), createFakeWorkflowRuns());
     expect(await api.isAdmin()).toBe(true);
   });
 
   it("returns null for a project with no saved bundle", async () => {
-    const api = new BaUiApiImpl(false, createFakeBaProjects());
+    const api = new BaUiApiImpl(false, createFakeBaProjects(), createFakeWorkflowRuns());
     expect(await api.getProject("proc-new")).toBeNull();
   });
 
   it("creates a valid starter bundle for a new project", async () => {
-    const api = new BaUiApiImpl(false, createFakeBaProjects());
+    const api = new BaUiApiImpl(false, createFakeBaProjects(), createFakeWorkflowRuns());
     const bundle = await api.createStarterBundle("proc-new", "New process");
     expect(bundle.processName).toBe("New process");
     expect(bundle.requirements.processId).toBe("proc-new");
@@ -50,14 +77,14 @@ describe("BaUiApiImpl", () => {
   });
 
   it("falls back to a default process name when blank", async () => {
-    const api = new BaUiApiImpl(false, createFakeBaProjects());
+    const api = new BaUiApiImpl(false, createFakeBaProjects(), createFakeWorkflowRuns());
     const bundle = await api.createStarterBundle("proc-new", "   ");
     expect(bundle.processName).toBe("Untitled process");
   });
 
   it("saves and reloads a project bundle, incrementing version", async () => {
     const projects = createFakeBaProjects();
-    const api = new BaUiApiImpl(false, projects);
+    const api = new BaUiApiImpl(false, projects, createFakeWorkflowRuns());
     const starter = await api.createStarterBundle("proc-1", "Process one");
     const saved = await api.saveProject("proc-1", starter);
     expect(saved.version).toBe(1);
@@ -71,12 +98,12 @@ describe("BaUiApiImpl", () => {
   });
 
   it("rejects an empty processId", async () => {
-    const api = new BaUiApiImpl(false, createFakeBaProjects());
+    const api = new BaUiApiImpl(false, createFakeBaProjects(), createFakeWorkflowRuns());
     await expect(api.getProject("")).rejects.toThrow(/processId is required/);
   });
 
   it("merges logged interview suggestions with gap-analysis suggestions, deduped by id", async () => {
-    const api = new BaUiApiImpl(false, createFakeBaProjects());
+    const api = new BaUiApiImpl(false, createFakeBaProjects(), createFakeWorkflowRuns());
     const starter = await api.createStarterBundle("proc-1", "Process one");
     // The starter template's single requirement is "functional", which has no expected role
     // keywords, so add a compliance requirement with no matching stakeholder to trigger a gap,
@@ -114,5 +141,50 @@ describe("BaUiApiImpl", () => {
     };
     const suggestions = await api.getStakeholderSuggestions(bundle);
     expect(suggestions.map((s) => s.id).sort()).toEqual(["gap-compliance", "interview-1"]);
+  });
+
+  describe("workflow runs", () => {
+    it("throws when starting a run for a project with no saved bundle", async () => {
+      const api = new BaUiApiImpl(false, createFakeBaProjects(), createFakeWorkflowRuns());
+      await expect(api.startWorkflowRun("proc-missing")).rejects.toThrow(/No saved BA Studio project/);
+    });
+
+    it("throws when starting a run for a project with no approved sign-off", async () => {
+      const projects = createFakeBaProjects();
+      const api = new BaUiApiImpl(false, projects, createFakeWorkflowRuns());
+      const starter = await api.createStarterBundle("proc-1", "Process one");
+      await api.saveProject("proc-1", {
+        ...starter,
+        signoffPacket: { ...starter.signoffPacket, approvers: [{ ...starter.signoffPacket.approvers[0], decision: "rejected" }] },
+      });
+      await expect(api.startWorkflowRun("proc-1")).rejects.toThrow(/no approved decision/);
+    });
+
+    it("starts, lists, and advances a run through to completion", async () => {
+      const projects = createFakeBaProjects();
+      const api = new BaUiApiImpl(false, projects, createFakeWorkflowRuns());
+      const starter = await api.createStarterBundle("proc-1", "Process one");
+      await api.saveProject("proc-1", starter);
+
+      const run = await api.startWorkflowRun("proc-1", "test run");
+      // the starter bundle's process graph is a simple start -> end with no decision/approval,
+      // so the run should auto-complete immediately.
+      expect(run.status).toBe("completed");
+      expect(run.startedByNote).toBe("test run");
+
+      const fetched = await api.getWorkflowRun("proc-1", run.runId);
+      expect(fetched?.runId).toBe(run.runId);
+
+      const list = await api.listWorkflowRuns("proc-1");
+      expect(list.map((r) => r.runId)).toEqual([run.runId]);
+    });
+
+    it("throws when advancing a run that does not exist", async () => {
+      const projects = createFakeBaProjects();
+      const api = new BaUiApiImpl(false, projects, createFakeWorkflowRuns());
+      const starter = await api.createStarterBundle("proc-1", "Process one");
+      await api.saveProject("proc-1", starter);
+      await expect(api.advanceWorkflowRun("proc-1", "does-not-exist", {})).rejects.toThrow(/not found/);
+    });
   });
 });

@@ -9,9 +9,16 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import type { BaProjectDurableObject } from "./ba-project-store.js";
+import type { WorkflowRunDurableObject } from "./workflow-run-store.js";
 import { findStakeholderGaps } from "./ba-schema.js";
 import { validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
-import type { BaProjectRecord, StakeholderSuggestionV11, WorkflowStudioDemoV11 } from "./types.js";
+import { advanceRun, assertSignedOff, buildNewRun } from "./workflow-run.js";
+import type {
+  BaProjectRecord,
+  StakeholderSuggestionV11,
+  WorkflowRunRecordV1,
+  WorkflowStudioDemoV11,
+} from "./types.js";
 import type { BaUiApi } from "./ba-ui-types.js";
 
 const MAX_PROCESS_ID_LENGTH = 256;
@@ -28,11 +35,17 @@ function validateProcessId(processId: string): void {
 export class BaUiApiImpl extends RpcTarget implements BaUiApi {
   readonly #isAdmin: boolean;
   readonly #baProjects: DurableObjectNamespace<BaProjectDurableObject>;
+  readonly #workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>;
 
-  constructor(isAdmin: boolean, baProjects: DurableObjectNamespace<BaProjectDurableObject>) {
+  constructor(
+    isAdmin: boolean,
+    baProjects: DurableObjectNamespace<BaProjectDurableObject>,
+    workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>,
+  ) {
     super();
     this.#isAdmin = isAdmin;
     this.#baProjects = baProjects;
+    this.#workflowRuns = workflowRuns;
   }
 
   async isAdmin(): Promise<boolean> {
@@ -61,6 +74,51 @@ export class BaUiApiImpl extends RpcTarget implements BaUiApi {
       byId.set(suggestion.id, suggestion);
     }
     return [...byId.values()];
+  }
+
+  async startWorkflowRun(processId: string, note?: string): Promise<WorkflowRunRecordV1> {
+    validateProcessId(processId);
+    const projectStub = this.#baProjects.get(this.#baProjects.idFromName(processId));
+    const record = await projectStub.getRecord();
+    if (!record) {
+      throw new Error(`No saved BA Studio project found for "${processId}".`);
+    }
+    assertSignedOff(record.bundle.signoffPacket);
+    const run = buildNewRun(processId, record.bundle.processGraph, record.bundle.signoffPacket.baselineVersion, note);
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    return runsStub.putRun(run);
+  }
+
+  async advanceWorkflowRun(
+    processId: string,
+    runId: string,
+    input: { condition?: string; approvalDecision?: "approved" | "rejected"; note?: string },
+  ): Promise<WorkflowRunRecordV1> {
+    validateProcessId(processId);
+    const projectStub = this.#baProjects.get(this.#baProjects.idFromName(processId));
+    const record = await projectStub.getRecord();
+    if (!record) {
+      throw new Error(`No saved BA Studio project found for "${processId}".`);
+    }
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    const run = await runsStub.getRun(runId);
+    if (!run) {
+      throw new Error(`Workflow run "${runId}" not found for project "${processId}".`);
+    }
+    const advanced = advanceRun(run, record.bundle.processGraph, input);
+    return runsStub.putRun(advanced);
+  }
+
+  async getWorkflowRun(processId: string, runId: string): Promise<WorkflowRunRecordV1 | null> {
+    validateProcessId(processId);
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    return runsStub.getRun(runId);
+  }
+
+  async listWorkflowRuns(processId: string): Promise<WorkflowRunRecordV1[]> {
+    validateProcessId(processId);
+    const runsStub = this.#workflowRuns.get(this.#workflowRuns.idFromName(processId));
+    return runsStub.listRuns();
   }
 
   async createStarterBundle(processId: string, processName: string): Promise<WorkflowStudioDemoV11> {

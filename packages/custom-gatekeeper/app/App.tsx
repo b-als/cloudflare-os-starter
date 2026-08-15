@@ -10,7 +10,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { RpcStub } from 'capnweb'
 import type { BaUiApi } from '../src/ba-ui-types'
-import type { BaProjectRecord, StakeholderSuggestionV11, WorkflowStudioDemoV11 } from '../src/types'
+import type {
+  BaProjectRecord,
+  StakeholderSuggestionV11,
+  WorkflowRunRecordV1,
+  WorkflowStudioDemoV11,
+} from '../src/types'
 
 type Tab = 'requirements' | 'conflicts' | 'process' | 'tradeoffs' | 'signoff'
 
@@ -30,6 +35,20 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
   const [status, setStatus] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [suggestions, setSuggestions] = useState<StakeholderSuggestionV11[]>([])
+  const [runs, setRuns] = useState<WorkflowRunRecordV1[]>([])
+  const [activeRun, setActiveRun] = useState<WorkflowRunRecordV1 | null>(null)
+  const [runNote, setRunNote] = useState('')
+  const [decisionCondition, setDecisionCondition] = useState('')
+
+  async function loadRuns(id: string) {
+    try {
+      const list = await api.listWorkflowRuns(id)
+      setRuns(list)
+      setActiveRun(list[0] ?? null)
+    } catch (err) {
+      setStatus(`Failed to load workflow runs: ${(err as Error).message}`)
+    }
+  }
 
   async function load(id: string) {
     setLoading(true)
@@ -50,6 +69,7 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
     } finally {
       setLoading(false)
     }
+    await loadRuns(id)
   }
 
   useEffect(() => {
@@ -79,6 +99,69 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
     () => bundle?.conflictRegister.conflicts.filter((c) => c.decision.status === 'open').length ?? 0,
     [bundle],
   )
+
+  async function runProcess() {
+    setLoading(true)
+    setStatus('')
+    try {
+      const run = await api.startWorkflowRun(processId, runNote.trim() || undefined)
+      setActiveRun(run)
+      setRunNote('')
+      setStatus(`Started run ${run.runId} — status: ${run.status}.`)
+      await loadRuns(processId)
+    } catch (err) {
+      setStatus(`Failed to start run: ${(err as Error).message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function submitApproval(decision: 'approved' | 'rejected') {
+    if (!activeRun) return
+    setLoading(true)
+    setStatus('')
+    try {
+      const run = await api.advanceWorkflowRun(processId, activeRun.runId, { approvalDecision: decision })
+      setActiveRun(run)
+      setStatus(`Run ${run.runId} now ${run.status}.`)
+      await loadRuns(processId)
+    } catch (err) {
+      setStatus(`Failed to record approval: ${(err as Error).message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function submitDecision() {
+    if (!activeRun) return
+    setLoading(true)
+    setStatus('')
+    try {
+      const run = await api.advanceWorkflowRun(processId, activeRun.runId, {
+        condition: decisionCondition.trim() || undefined,
+      })
+      setActiveRun(run)
+      setDecisionCondition('')
+      setStatus(`Run ${run.runId} now ${run.status}.`)
+      await loadRuns(processId)
+    } catch (err) {
+      setStatus(`Failed to record decision: ${(err as Error).message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const pendingNode = useMemo(() => {
+    if (!activeRun?.pendingNodeId || !bundle) return null
+    return bundle.processGraph.nodes.find((n) => n.id === activeRun.pendingNodeId) ?? null
+  }, [activeRun, bundle])
+
+  const pendingEdgeConditions = useMemo(() => {
+    if (!pendingNode || !bundle) return []
+    return bundle.processGraph.edges
+      .filter((e) => e.source === pendingNode.id && e.condition)
+      .map((e) => e.condition as string)
+  }, [pendingNode, bundle])
 
   return (
     <div style={{ padding: 16, maxWidth: 960, margin: '0 auto' }}>
@@ -205,6 +288,103 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
             ))}
             {bundle.signoffPacket.approvers.length === 0 && <p>No approvals recorded yet.</p>}
           </ul>
+
+          <div style={{ borderTop: '1px solid #ccc', marginTop: 16, paddingTop: 12 }}>
+            <h2 style={{ fontSize: 16, marginBottom: 8 }}>Run this process</h2>
+            <p style={{ opacity: 0.75, fontSize: 13 }}>
+              Executes the saved process map step by step. Decision and approval nodes pause the
+              run for input; every other node completes automatically (no real system actions are
+              triggered yet — this proves out the run/audit trail ahead of wiring real actions).
+            </p>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <input
+                value={runNote}
+                onChange={(e) => setRunNote(e.target.value)}
+                placeholder="Optional note for this run"
+                style={{ flex: 1, padding: '6px 8px' }}
+              />
+              <button onClick={runProcess} disabled={loading || !record}>
+                Start run
+              </button>
+            </div>
+            {!record && <p style={{ fontSize: 13, opacity: 0.75 }}>Save the project before starting a run.</p>}
+
+            {activeRun && (
+              <div style={{ border: '1px solid #ccc', borderRadius: 6, padding: 10, marginBottom: 12 }}>
+                <p style={{ margin: 0, fontSize: 13 }}>
+                  Run <code>{activeRun.runId}</code> — <strong>{activeRun.status}</strong>
+                  {activeRun.startedByNote ? ` — "${activeRun.startedByNote}"` : ''}
+                </p>
+                <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 13 }}>
+                  {activeRun.steps.map((s, i) => (
+                    <li key={i}>
+                      {s.label} ({s.type}) — {s.status}
+                      {s.chosenCondition ? ` — chose "${s.chosenCondition}"` : ''}
+                      {s.approvalDecision ? ` — ${s.approvalDecision}` : ''}
+                    </li>
+                  ))}
+                </ul>
+
+                {activeRun.status === 'waitingForInput' && pendingNode?.type === 'approval' && (
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 600 }}>
+                      Awaiting approval: {pendingNode.label}
+                    </p>
+                    <button onClick={() => submitApproval('approved')} disabled={loading} style={{ marginRight: 8 }}>
+                      Approve
+                    </button>
+                    <button onClick={() => submitApproval('rejected')} disabled={loading}>
+                      Reject
+                    </button>
+                  </div>
+                )}
+
+                {activeRun.status === 'waitingForInput' && pendingNode?.type === 'decision' && (
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 600 }}>
+                      Awaiting decision: {pendingNode.label}
+                    </p>
+                    {pendingEdgeConditions.length > 0 ? (
+                      <select
+                        value={decisionCondition}
+                        onChange={(e) => setDecisionCondition(e.target.value)}
+                        style={{ marginRight: 8, padding: '4px 6px' }}
+                      >
+                        <option value="">Choose branch…</option>
+                        {pendingEdgeConditions.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <button onClick={submitDecision} disabled={loading}>
+                      Confirm
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {runs.length > 0 && (
+              <details>
+                <summary style={{ cursor: 'pointer', fontSize: 13 }}>Run history ({runs.length})</summary>
+                <ul style={{ fontSize: 13 }}>
+                  {runs.map((r) => (
+                    <li key={r.runId}>
+                      <button
+                        onClick={() => setActiveRun(r)}
+                        style={{ background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}
+                      >
+                        {r.runId}
+                      </button>{' '}
+                      — {r.status} — started {new Date(r.startedAt).toLocaleString()}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
         </div>
       )}
     </div>
