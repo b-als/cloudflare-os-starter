@@ -27,6 +27,42 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'signoff', label: 'Sign-off' },
 ]
 
+type RequirementCategory = 'functional' | 'nonFunctional' | 'data' | 'integration' | 'compliance' | 'reporting'
+type RequirementPriority = 'must' | 'should' | 'could' | 'wont'
+type ConflictImpact = 'scope' | 'cost' | 'timeline' | 'risk' | 'compliance'
+
+const REQUIREMENT_CATEGORIES: RequirementCategory[] = [
+  'functional',
+  'nonFunctional',
+  'data',
+  'integration',
+  'compliance',
+  'reporting',
+]
+const REQUIREMENT_PRIORITIES: RequirementPriority[] = ['must', 'should', 'could', 'wont']
+const CONFLICT_IMPACTS: ConflictImpact[] = ['scope', 'cost', 'timeline', 'risk', 'compliance']
+
+const LIFECYCLE_STAGES = ['Interview', 'Review', 'Handoff', 'Signed off', 'Running'] as const
+type LifecycleStage = (typeof LIFECYCLE_STAGES)[number]
+
+function makeId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+const emptyRequirementForm = {
+  title: '',
+  category: 'functional' as RequirementCategory,
+  statement: '',
+  priority: 'should' as RequirementPriority,
+}
+
+const emptyConflictForm = {
+  summary: '',
+  impact: 'scope' as ConflictImpact,
+  requirementIds: [] as string[],
+  resolutionOwnerStakeholderId: '',
+}
+
 export default function App({ api }: { api: RpcStub<BaUiApi> }) {
   const [processId, setProcessId] = useState('proc-onboarding-001')
   const [record, setRecord] = useState<BaProjectRecord | null>(null)
@@ -39,6 +75,11 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
   const [activeRun, setActiveRun] = useState<WorkflowRunRecordV1 | null>(null)
   const [runNote, setRunNote] = useState('')
   const [decisionCondition, setDecisionCondition] = useState('')
+
+  const [requirementForm, setRequirementForm] = useState(emptyRequirementForm)
+  const [editingRequirementId, setEditingRequirementId] = useState<string | null>(null)
+  const [conflictForm, setConflictForm] = useState(emptyConflictForm)
+  const [editingConflictId, setEditingConflictId] = useState<string | null>(null)
 
   async function loadRuns(id: string) {
     try {
@@ -99,6 +140,164 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
     () => bundle?.conflictRegister.conflicts.filter((c) => c.decision.status === 'open').length ?? 0,
     [bundle],
   )
+
+  function resetRequirementForm() {
+    setRequirementForm(emptyRequirementForm)
+    setEditingRequirementId(null)
+  }
+
+  function startEditRequirement(id: string) {
+    const req = bundle?.requirements.requirements.find((r) => r.id === id)
+    if (!req) return
+    setRequirementForm({
+      title: req.title,
+      category: req.category,
+      statement: req.statement,
+      priority: req.priority,
+    })
+    setEditingRequirementId(id)
+  }
+
+  async function submitRequirementForm() {
+    if (!bundle) return
+    const title = requirementForm.title.trim()
+    const statement = requirementForm.statement.trim()
+    if (!title || !statement) {
+      setStatus('Requirement needs a title and statement.')
+      return
+    }
+    const requirements = bundle.requirements.requirements
+    let nextRequirements
+    if (editingRequirementId) {
+      nextRequirements = requirements.map((r) =>
+        r.id === editingRequirementId
+          ? { ...r, title, category: requirementForm.category, statement, priority: requirementForm.priority }
+          : r,
+      )
+    } else {
+      nextRequirements = [
+        ...requirements,
+        {
+          id: makeId('req'),
+          title,
+          category: requirementForm.category,
+          statement,
+          acceptanceCriteria: [],
+          priority: requirementForm.priority,
+          ownerStakeholderId: bundle.requirements.stakeholders[0]?.id ?? '',
+          sourceStakeholderIds: [],
+          fitCriterion: '',
+          benefitHypothesis: '',
+        },
+      ]
+    }
+    const nextBundle: WorkflowStudioDemoV11 = {
+      ...bundle,
+      requirements: { ...bundle.requirements, requirements: nextRequirements },
+    }
+    setBundle(nextBundle)
+    resetRequirementForm()
+    await save()
+  }
+
+  function deleteRequirement(id: string) {
+    if (!bundle) return
+    const nextBundle: WorkflowStudioDemoV11 = {
+      ...bundle,
+      requirements: {
+        ...bundle.requirements,
+        requirements: bundle.requirements.requirements.filter((r) => r.id !== id),
+      },
+    }
+    setBundle(nextBundle)
+    if (editingRequirementId === id) resetRequirementForm()
+    save()
+  }
+
+  function resetConflictForm() {
+    setConflictForm(emptyConflictForm)
+    setEditingConflictId(null)
+  }
+
+  function startEditConflict(id: string) {
+    const c = bundle?.conflictRegister.conflicts.find((c) => c.id === id)
+    if (!c) return
+    setConflictForm({
+      summary: c.summary,
+      impact: c.impact,
+      requirementIds: c.requirementIds,
+      resolutionOwnerStakeholderId: c.resolutionOwnerStakeholderId,
+    })
+    setEditingConflictId(id)
+  }
+
+  function toggleConflictRequirementId(id: string) {
+    setConflictForm((f) => ({
+      ...f,
+      requirementIds: f.requirementIds.includes(id)
+        ? f.requirementIds.filter((r) => r !== id)
+        : [...f.requirementIds, id],
+    }))
+  }
+
+  async function submitConflictForm() {
+    if (!bundle) return
+    const summary = conflictForm.summary.trim()
+    if (!summary) {
+      setStatus('Conflict needs a summary.')
+      return
+    }
+    const conflicts = bundle.conflictRegister.conflicts
+    let nextConflicts
+    if (editingConflictId) {
+      nextConflicts = conflicts.map((c) =>
+        c.id === editingConflictId
+          ? {
+              ...c,
+              summary,
+              impact: conflictForm.impact,
+              requirementIds: conflictForm.requirementIds,
+              resolutionOwnerStakeholderId: conflictForm.resolutionOwnerStakeholderId.trim(),
+            }
+          : c,
+      )
+    } else {
+      nextConflicts = [
+        ...conflicts,
+        {
+          id: makeId('conflict'),
+          summary,
+          requirementIds: conflictForm.requirementIds,
+          stakeholderIds: [],
+          impact: conflictForm.impact,
+          resolutionOwnerStakeholderId: conflictForm.resolutionOwnerStakeholderId.trim(),
+          decision: { status: 'open' as const },
+        },
+      ]
+    }
+    const nextBundle: WorkflowStudioDemoV11 = {
+      ...bundle,
+      conflictRegister: { ...bundle.conflictRegister, conflicts: nextConflicts },
+    }
+    setBundle(nextBundle)
+    resetConflictForm()
+    await save()
+  }
+
+  function setConflictStatus(id: string, status: 'open' | 'inReview' | 'resolved' | 'deferred' | 'rejected') {
+    if (!bundle) return
+    const nextBundle: WorkflowStudioDemoV11 = {
+      ...bundle,
+      conflictRegister: {
+        ...bundle.conflictRegister,
+        conflicts: bundle.conflictRegister.conflicts.map((c) =>
+          c.id === id ? { ...c, decision: { ...c.decision, status } } : c,
+        ),
+      },
+    }
+    setBundle(nextBundle)
+    save()
+  }
 
   async function runProcess() {
     setLoading(true)
@@ -163,6 +362,19 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
       .map((e) => e.condition as string)
   }, [pendingNode, bundle])
 
+  const currentStage: LifecycleStage = useMemo(() => {
+    if (activeRun && activeRun.status !== 'completed' && activeRun.status !== 'failed') return 'Running'
+    const hasApproval = bundle?.signoffPacket.approvers.some(
+      (a) => a.decision === 'approved' || a.decision === 'approvedWithConditions',
+    )
+    if (hasApproval) return 'Signed off'
+    const resolvedConflicts = bundle?.conflictRegister.conflicts.filter((c) => c.decision.status === 'resolved').length ?? 0
+    const totalConflicts = bundle?.conflictRegister.conflicts.length ?? 0
+    if (requirementCount > 0 && totalConflicts > 0 && resolvedConflicts === totalConflicts) return 'Handoff'
+    if (requirementCount > 0 && openConflictCount > 0) return 'Review'
+    return 'Interview'
+  }, [activeRun, bundle, requirementCount, openConflictCount])
+
   return (
     <div style={{ padding: 16, maxWidth: 960, margin: '0 auto' }}>
       <h1 style={{ fontSize: 20, marginBottom: 4 }}>BA Studio — {bundle?.processName ?? processId}</h1>
@@ -187,6 +399,25 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
       </div>
 
       {status && <div style={{ fontSize: 13, marginBottom: 12, opacity: 0.85 }}>{status}</div>}
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {LIFECYCLE_STAGES.map((stage) => (
+          <span
+            key={stage}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 999,
+              fontSize: 12,
+              border: '1px solid #999',
+              background: stage === currentStage ? '#333' : 'transparent',
+              color: stage === currentStage ? '#fff' : 'inherit',
+              fontWeight: stage === currentStage ? 600 : 400,
+            }}
+          >
+            {stage}
+          </span>
+        ))}
+      </div>
 
       {suggestions.length > 0 && (
         <div
@@ -235,25 +466,167 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
       </div>
 
       {bundle && tab === 'requirements' && (
-        <ul>
-          {bundle.requirements.requirements.map((r) => (
-            <li key={r.id} style={{ marginBottom: 10 }}>
-              <strong>{r.title}</strong> ({r.priority}) — {r.statement}
-            </li>
-          ))}
-          {bundle.requirements.requirements.length === 0 && <p>No requirements captured yet.</p>}
-        </ul>
+        <div>
+          <div style={{ border: '1px solid #ccc', borderRadius: 6, padding: 10, marginBottom: 12 }}>
+            <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>
+              {editingRequirementId ? 'Edit requirement' : 'Add requirement'}
+            </h3>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <input
+                value={requirementForm.title}
+                onChange={(e) => setRequirementForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder="Title"
+                style={{ flex: '1 1 200px', padding: '6px 8px' }}
+              />
+              <select
+                value={requirementForm.category}
+                onChange={(e) =>
+                  setRequirementForm((f) => ({ ...f, category: e.target.value as RequirementCategory }))
+                }
+                style={{ padding: '6px 8px' }}
+              >
+                {REQUIREMENT_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={requirementForm.priority}
+                onChange={(e) =>
+                  setRequirementForm((f) => ({ ...f, priority: e.target.value as RequirementPriority }))
+                }
+                style={{ padding: '6px 8px' }}
+              >
+                {REQUIREMENT_PRIORITIES.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <textarea
+              value={requirementForm.statement}
+              onChange={(e) => setRequirementForm((f) => ({ ...f, statement: e.target.value }))}
+              placeholder="Statement"
+              style={{ width: '100%', padding: '6px 8px', marginBottom: 8, minHeight: 60 }}
+            />
+            <button onClick={submitRequirementForm} disabled={loading} style={{ marginRight: 8 }}>
+              {editingRequirementId ? 'Save requirement' : 'Add requirement'}
+            </button>
+            {editingRequirementId && (
+              <button onClick={resetRequirementForm} disabled={loading}>
+                Cancel
+              </button>
+            )}
+          </div>
+
+          <ul style={{ paddingLeft: 0, listStyle: 'none' }}>
+            {bundle.requirements.requirements.map((r) => (
+              <li
+                key={r.id}
+                style={{ marginBottom: 10, border: '1px solid #ddd', borderRadius: 6, padding: 8 }}
+              >
+                <strong>{r.title}</strong> ({r.priority}, {r.category}) — {r.statement}
+                <div style={{ marginTop: 6 }}>
+                  <button onClick={() => startEditRequirement(r.id)} style={{ marginRight: 8 }}>
+                    Edit
+                  </button>
+                  <button onClick={() => deleteRequirement(r.id)}>Delete</button>
+                </div>
+              </li>
+            ))}
+            {bundle.requirements.requirements.length === 0 && <p>No requirements captured yet.</p>}
+          </ul>
+        </div>
       )}
 
       {bundle && tab === 'conflicts' && (
-        <ul>
-          {bundle.conflictRegister.conflicts.map((c) => (
-            <li key={c.id} style={{ marginBottom: 10 }}>
-              <strong>{c.summary}</strong> — {c.impact} — status: {c.decision.status}
-            </li>
-          ))}
-          {bundle.conflictRegister.conflicts.length === 0 && <p>No conflicts recorded.</p>}
-        </ul>
+        <div>
+          <div style={{ border: '1px solid #ccc', borderRadius: 6, padding: 10, marginBottom: 12 }}>
+            <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>
+              {editingConflictId ? 'Edit conflict' : 'Log conflict'}
+            </h3>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <input
+                value={conflictForm.summary}
+                onChange={(e) => setConflictForm((f) => ({ ...f, summary: e.target.value }))}
+                placeholder="Summary"
+                style={{ flex: '1 1 200px', padding: '6px 8px' }}
+              />
+              <select
+                value={conflictForm.impact}
+                onChange={(e) => setConflictForm((f) => ({ ...f, impact: e.target.value as ConflictImpact }))}
+                style={{ padding: '6px 8px' }}
+              >
+                {CONFLICT_IMPACTS.map((i) => (
+                  <option key={i} value={i}>
+                    {i}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={conflictForm.resolutionOwnerStakeholderId}
+                onChange={(e) =>
+                  setConflictForm((f) => ({ ...f, resolutionOwnerStakeholderId: e.target.value }))
+                }
+                placeholder="Resolution owner (stakeholder id)"
+                style={{ flex: '1 1 200px', padding: '6px 8px' }}
+              />
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <p style={{ margin: '0 0 4px', fontSize: 13, opacity: 0.75 }}>Related requirements:</p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {bundle.requirements.requirements.map((r) => (
+                  <label key={r.id} style={{ fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={conflictForm.requirementIds.includes(r.id)}
+                      onChange={() => toggleConflictRequirementId(r.id)}
+                    />{' '}
+                    {r.title}
+                  </label>
+                ))}
+                {bundle.requirements.requirements.length === 0 && (
+                  <span style={{ fontSize: 13, opacity: 0.6 }}>No requirements yet.</span>
+                )}
+              </div>
+            </div>
+            <button onClick={submitConflictForm} disabled={loading} style={{ marginRight: 8 }}>
+              {editingConflictId ? 'Save conflict' : 'Log conflict'}
+            </button>
+            {editingConflictId && (
+              <button onClick={resetConflictForm} disabled={loading}>
+                Cancel
+              </button>
+            )}
+          </div>
+
+          <ul style={{ paddingLeft: 0, listStyle: 'none' }}>
+            {bundle.conflictRegister.conflicts.map((c) => (
+              <li
+                key={c.id}
+                style={{ marginBottom: 10, border: '1px solid #ddd', borderRadius: 6, padding: 8 }}
+              >
+                <strong>{c.summary}</strong> — {c.impact} — status: {c.decision.status}
+                <div style={{ marginTop: 6 }}>
+                  <button onClick={() => startEditConflict(c.id)} style={{ marginRight: 8 }}>
+                    Edit
+                  </button>
+                  {c.decision.status !== 'resolved' && (
+                    <button onClick={() => setConflictStatus(c.id, 'resolved')} style={{ marginRight: 8 }}>
+                      Mark resolved
+                    </button>
+                  )}
+                  {c.decision.status !== 'open' && (
+                    <button onClick={() => setConflictStatus(c.id, 'open')}>Reopen</button>
+                  )}
+                </div>
+              </li>
+            ))}
+            {bundle.conflictRegister.conflicts.length === 0 && <p>No conflicts recorded.</p>}
+          </ul>
+        </div>
       )}
 
       {bundle && tab === 'process' && (
