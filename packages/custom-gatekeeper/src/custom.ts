@@ -20,7 +20,10 @@ import type {
 } from "@gadgets/workshop-shared/gatekeeper";
 import { BUSINESS_ANALYSIS_SCHEMA_V1, BUSINESS_ANALYSIS_SCHEMA_V11 } from "./ba-schema.js";
 import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
+import { createBaSessionContext } from "./ba-session.js";
 import type {
+  BaSessionConfig,
+  BaSessionContext,
   BusinessAnalysisSchemaBundleV1,
   BusinessAnalysisSchemaBundleV11,
   CustomDeploymentInfo,
@@ -109,6 +112,20 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
       throw new Error(`Workflow studio demo v1.1 is invalid: ${errors.join(" | ")}`);
     }
     return WORKFLOW_STUDIO_DEMO_V11;
+  }
+
+  async initialiseBaSession(config: BaSessionConfig): Promise<BaSessionContext> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "Initialise BA Studio session",
+      description: `Initialise a BA ${config.mode} session for project "${config.projectName}" with ${config.stakeholders.length} stakeholder(s).`,
+    });
+    if (!config.projectName || config.projectName.trim().length === 0) {
+      throw new Error("BA session initialisation requires a non-empty projectName.");
+    }
+    if (!["interview", "review", "handoff"].includes(config.mode)) {
+      throw new Error(`Unknown BA session mode: ${config.mode}`);
+    }
+    return createBaSessionContext(config);
   }
 
   [Symbol.dispose](): void {
