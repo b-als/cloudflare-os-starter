@@ -169,6 +169,16 @@ The minimal example flow is:
 
 Read the [package guide](../packages/custom-gatekeeper/README.md) and upstream [`write-gatekeeper` skill](https://github.com/cloudflare/cloudflare-os/blob/main/.agents/skills/write-gatekeeper/SKILL.md) before adding OAuth, URL-scoped resources, writes, simulations, hooks, configurator UI, or stricter observer verification.
 
+### BA Studio and Workflow Studio
+
+`GATEKEEPER_CUSTOM` also ships a business-analysis example app, reachable at `/gatekeepers/custom` ("BA Studio"). It edits a per-project bundle of requirements, conflicts, a process graph, trade-offs, and sign-off, and reads/writes it through the same RPC surface the Workshop uses everywhere else.
+
+- Requirements and conflicts can be added or edited inline, not only viewed.
+- A stage strip at the top of the page shows where a project sits: Interview → Review → Handoff → Signed off → Running. This is derived automatically from the project's current requirements, conflicts, sign-off, and run state, so it always reflects real data rather than a status you set by hand.
+- The Workshop's "Workflow Studio (interactive)" page (`/workflow-studio`) shows the same project as an editable process graph: drag nodes, add edges, save changes, and start a workflow run. Once a run is started, pending steps can be approved, rejected, or resolved by picking a decision branch. There is no separate demo dataset anymore; both pages read and write the same persisted project.
+
+Both surfaces remain built on synthetic data (see the [package README](../packages/custom-gatekeeper/README.md)) until a real system is connected behind the same governed session.
+
 ## Code extensions
 
 Prefer wrapper-owned Workers and [service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/) over patches inside the submodule. Modify upstream only when a Worker boundary cannot express the behavior, and keep the change as a reviewable upstream commit or fork rather than a generated overlay.
