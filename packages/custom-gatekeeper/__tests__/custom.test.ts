@@ -17,6 +17,7 @@ import {
   validateTradeoffRegisterArtifactV11,
 } from "../src/ba-schema.js";
 import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "../src/workflow-demo.js";
+import { createBaSessionContext, getBaSessionCatalogEntry } from "../src/ba-session.js";
 
 describe("custom-gatekeeper", () => {
   it("describes an auto-provisioned singleton", () => {
@@ -427,5 +428,91 @@ describe("custom-gatekeeper", () => {
 
   it("validates the workflow studio demo contract", () => {
     expect(validateWorkflowStudioDemoV11(WORKFLOW_STUDIO_DEMO_V11)).toEqual([]);
+  });
+
+  describe("BA session initialisation", () => {
+    const makeQueue = () => ({
+      authorizeObservation(_obs: unknown) { return Promise.resolve(); },
+    });
+
+    it("creates a BA interview session context with system prompt and opening message", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const ctx = await session.initialiseBaSession({
+        projectName: "Customer Onboarding Redesign",
+        stakeholders: [
+          { name: "Alice", role: "Product Owner" },
+          { name: "Bob", role: "Risk Manager" },
+        ],
+        mode: "interview",
+      });
+      expect(ctx.config.projectName).toBe("Customer Onboarding Redesign");
+      expect(ctx.config.mode).toBe("interview");
+      expect(ctx.agentSystemPrompt).toContain("BA Studio");
+      expect(ctx.agentSystemPrompt).toContain("Customer Onboarding Redesign");
+      expect(ctx.agentSystemPrompt).toContain("Alice");
+      expect(ctx.agentSystemPrompt).toContain("Bob");
+      expect(ctx.agentOpeningMessage).toContain("Customer Onboarding Redesign");
+      expect(ctx.initialisedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it("creates a BA review session context", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const ctx = await session.initialiseBaSession({
+        projectName: "Risk Review Portal",
+        stakeholders: [{ name: "Carol", role: "Compliance Lead" }],
+        mode: "review",
+      });
+      expect(ctx.agentSystemPrompt).toContain("review");
+      expect(ctx.agentOpeningMessage).toContain("review phase");
+    });
+
+    it("creates a BA handoff session context", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const ctx = await session.initialiseBaSession({
+        projectName: "Payments Modernisation",
+        stakeholders: [],
+        mode: "handoff",
+      });
+      expect(ctx.agentSystemPrompt).toContain("Workflow Handoff");
+      expect(ctx.agentOpeningMessage).toContain("approved");
+    });
+
+    it("rejects an empty project name", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      await expect(
+        session.initialiseBaSession({ projectName: "  ", stakeholders: [], mode: "interview" }),
+      ).rejects.toThrow("non-empty projectName");
+    });
+
+    it("rejects an unknown session mode", () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      // capnweb-validate rejects invalid union values synchronously before the method body runs.
+      expect(() =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        session.initialiseBaSession({ projectName: "X", stakeholders: [], mode: "unknown" as any }),
+      ).toThrow();
+    });
+
+    it("builds catalog entries for discovery", () => {
+      const entry = getBaSessionCatalogEntry({
+        projectName: "My Project",
+        stakeholders: [{ name: "Alice", role: "PO" }],
+        mode: "interview",
+      });
+      expect(entry.id).toBe("ba-session:my-project");
+      expect(entry.title).toContain("My Project");
+      expect(entry.title).toContain("Requirements Interview");
+      expect(entry.description).toContain("Alice");
+    });
+
+    it("createBaSessionContext includes domain context in the system prompt", () => {
+      const ctx = createBaSessionContext({
+        projectName: "Claims Automation",
+        stakeholders: [],
+        mode: "interview",
+        domainContext: "UK motor insurance, FCA regulated.",
+      });
+      expect(ctx.agentSystemPrompt).toContain("UK motor insurance");
+    });
   });
 });

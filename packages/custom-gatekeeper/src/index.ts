@@ -1,5 +1,6 @@
 export * from "./custom.js";
 export * from "./ba-schema.js";
+export * from "./ba-session.js";
 export * from "./workflow-demo.js";
 
 export default {

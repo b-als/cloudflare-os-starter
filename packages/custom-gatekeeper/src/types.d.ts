@@ -211,6 +211,25 @@ export interface WorkflowStudioDemoV11 {
   };
 }
 
+/** BA Studio session mode. */
+export type BaSessionMode = "interview" | "review" | "handoff";
+
+/** Configuration supplied when initialising a BA Studio chat session. */
+export interface BaSessionConfig {
+  projectName: string;
+  stakeholders: Array<{ name: string; role: string }>;
+  mode: BaSessionMode;
+  domainContext?: string;
+}
+
+/** Context produced for the Cloudflare OS agent turn loop at session start. */
+export interface BaSessionContext {
+  initialisedAt: string;
+  config: BaSessionConfig;
+  agentSystemPrompt: string;
+  agentOpeningMessage: string;
+}
+
 /** Example read-only capability provided to the CloudflareOS agent. */
 export interface CustomSession {
   /** Returns the deployment's example information after recording an observation. */
@@ -224,4 +243,11 @@ export interface CustomSession {
 
   /** Returns a validated end-to-end demo payload for workflow viewer and editor contracts. */
   getWorkflowStudioDemoV11(): Promise<WorkflowStudioDemoV11>;
+
+  /**
+   * Initialises a BA Studio chat session and returns the agent system prompt
+   * and opening message. Call this at workspace open time to wire the agent
+   * into BA interview, review, or handoff mode.
+   */
+  initialiseBaSession(config: BaSessionConfig): Promise<BaSessionContext>;
 }
