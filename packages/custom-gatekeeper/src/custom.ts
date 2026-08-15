@@ -21,7 +21,9 @@ import type {
 import { BUSINESS_ANALYSIS_SCHEMA_V1, BUSINESS_ANALYSIS_SCHEMA_V11 } from "./ba-schema.js";
 import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
 import { createBaSessionContext } from "./ba-session.js";
+import type { BaProjectDurableObject } from "./ba-project-store.js";
 import type {
+  BaProjectRecord,
   BaSessionConfig,
   BaSessionContext,
   BusinessAnalysisSchemaBundleV1,
@@ -39,6 +41,18 @@ const CUSTOM_ICON = {
       "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='none' stroke='currentColor' stroke-width='20'><path d='M52 72h152v112H52z'/><path d='m52 88 76 52 76-52'/></svg>",
     ),
 };
+
+const MAX_PROCESS_ID_LENGTH = 256;
+
+/** Validates a processId before using it as a Durable Object name. */
+function validateProcessId(processId: string): void {
+  if (typeof processId !== "string" || processId.trim().length === 0) {
+    throw new Error("processId is required.");
+  }
+  if (processId.length > MAX_PROCESS_ID_LENGTH) {
+    throw new Error(`processId is too long (max ${MAX_PROCESS_ID_LENGTH} characters).`);
+  }
+}
 
 type ObservationQueue = Pick<ApprovalQueue, "authorizeObservation"> &
   Partial<{ [Symbol.dispose](): void }>;
@@ -69,11 +83,17 @@ export function describeCustomAccount(): AccountDescription {
 export class CustomSessionImpl extends RpcTarget implements CustomSession {
   readonly #approvalQueue: ObservationQueue;
   readonly #info: CustomDeploymentInfo;
+  readonly #baProjects: DurableObjectNamespace<BaProjectDurableObject>;
 
-  constructor(approvalQueue: ObservationQueue, info: CustomDeploymentInfo) {
+  constructor(
+    approvalQueue: ObservationQueue,
+    info: CustomDeploymentInfo,
+    baProjects: DurableObjectNamespace<BaProjectDurableObject>,
+  ) {
     super();
     this.#approvalQueue = approvalQueue;
     this.#info = info;
+    this.#baProjects = baProjects;
   }
 
   async getDeploymentInfo(): Promise<CustomDeploymentInfo> {
@@ -128,6 +148,26 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
     return createBaSessionContext(config);
   }
 
+  async getBaProject(processId: string): Promise<BaProjectRecord | null> {
+    validateProcessId(processId);
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read BA Studio project",
+      description: `Read the stored artifact bundle for BA Studio project "${processId}".`,
+    });
+    const stub = this.#baProjects.get(this.#baProjects.idFromName(processId));
+    return stub.getRecord();
+  }
+
+  async saveBaProject(processId: string, bundle: WorkflowStudioDemoV11): Promise<BaProjectRecord> {
+    validateProcessId(processId);
+    await this.#approvalQueue.authorizeObservation({
+      title: "Save BA Studio project",
+      description: `Persist a new artifact bundle version for BA Studio project "${processId}".`,
+    });
+    const stub = this.#baProjects.get(this.#baProjects.idFromName(processId));
+    return stub.saveBundle(processId, bundle);
+  }
+
   [Symbol.dispose](): void {
     this.#approvalQueue[Symbol.dispose]?.();
   }
@@ -154,10 +194,14 @@ export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements G
   }
 
   async startSession(approvalQueue: RpcStub<ApprovalQueue>): Promise<CustomSession> {
-    return new CustomSessionImpl(approvalQueue.dup(), {
-      name: this.env.CUSTOM_NAME,
-      message: this.env.CUSTOM_MESSAGE,
-    });
+    return new CustomSessionImpl(
+      approvalQueue.dup(),
+      {
+        name: this.env.CUSTOM_NAME,
+        message: this.env.CUSTOM_MESSAGE,
+      },
+      this.ctx.exports.BaProjectDurableObject,
+    );
   }
 
   async addObserver(_id: string, _user: Fetcher<GatekeeperUserVerifier>): Promise<void> {}

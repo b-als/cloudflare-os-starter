@@ -18,6 +18,51 @@ import {
 } from "../src/ba-schema.js";
 import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "../src/workflow-demo.js";
 import { createBaSessionContext, getBaSessionCatalogEntry } from "../src/ba-session.js";
+import type { BaProjectDurableObject } from "../src/ba-project-store.js";
+import type { BaProjectRecord } from "../src/types.js";
+
+/**
+ * An in-memory fake of the BaProjectDurableObject namespace, keyed by DO name (== processId),
+ * used to unit test CustomSessionImpl.getBaProject/saveBaProject without a real Workers runtime.
+ */
+function createFakeBaProjects(): DurableObjectNamespace<BaProjectDurableObject> {
+  const records = new Map<string, BaProjectRecord>();
+  const stubFor = (name: string) => ({
+    async getRecord(): Promise<BaProjectRecord | null> {
+      return records.get(name) ?? null;
+    },
+    async saveBundle(processId: string, bundle: unknown): Promise<BaProjectRecord> {
+      const bundleProcessId = (bundle as { processGraph?: { processId?: string } }).processGraph
+        ?.processId;
+      if (bundleProcessId !== processId) {
+        throw new Error(
+          `Bundle processGraph.processId "${bundleProcessId}" does not match project "${processId}".`,
+        );
+      }
+      const errors = validateWorkflowStudioDemoV11(bundle as WorkflowStudioDemoV11Like);
+      if (errors.length) {
+        throw new Error(`Workflow studio bundle is invalid: ${errors.join(" | ")}`);
+      }
+      const previous = records.get(name);
+      const record: BaProjectRecord = {
+        processId,
+        version: (previous?.version ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+        bundle: bundle as BaProjectRecord["bundle"],
+      };
+      records.set(name, record);
+      return record;
+    },
+  });
+  return {
+    idFromName: (name: string) => name,
+    get: (name: string) => stubFor(name),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+// Local alias to avoid importing the full WorkflowStudioDemoV11 type just for structural validation.
+type WorkflowStudioDemoV11Like = Parameters<typeof validateWorkflowStudioDemoV11>[0];
 
 describe("custom-gatekeeper", () => {
   it("describes an auto-provisioned singleton", () => {
@@ -46,6 +91,7 @@ describe("custom-gatekeeper", () => {
         },
       },
       { name: "Acme", message: "Use the internal handbook." },
+      createFakeBaProjects(),
     );
 
     await expect(session.getDeploymentInfo()).resolves.toEqual({
@@ -71,6 +117,7 @@ describe("custom-gatekeeper", () => {
         },
       },
       { name: "Acme", message: "Use the internal handbook." },
+      createFakeBaProjects(),
     );
 
     await expect(session.getBusinessAnalysisSchemaV1()).resolves.toEqual(BUSINESS_ANALYSIS_SCHEMA_V1);
@@ -90,6 +137,7 @@ describe("custom-gatekeeper", () => {
         },
       },
       { name: "Acme", message: "Use the internal handbook." },
+      createFakeBaProjects(),
     );
 
     await expect(session.getBusinessAnalysisSchemaV11()).resolves.toEqual(BUSINESS_ANALYSIS_SCHEMA_V11);
@@ -110,6 +158,7 @@ describe("custom-gatekeeper", () => {
         },
       },
       { name: "Acme", message: "Use the internal handbook." },
+      createFakeBaProjects(),
     );
 
     await expect(session.getWorkflowStudioDemoV11()).resolves.toEqual(WORKFLOW_STUDIO_DEMO_V11);
@@ -117,6 +166,67 @@ describe("custom-gatekeeper", () => {
       title: "Read workflow studio demo v1.1",
       description:
         "Read a validated end-to-end BA artifact bundle for workflow viewer and editor integration.",
+    });
+  });
+
+  describe("BA project storage", () => {
+    const makeQueue = () => ({
+      authorizeObservation(_obs: unknown) { return Promise.resolve(); },
+    });
+
+    it("returns null for a project that has never been saved, after authorizing observation", async () => {
+      let observation: unknown;
+      const session = new CustomSessionImpl(
+        { authorizeObservation: (value: unknown) => { observation = value; return Promise.resolve(); } },
+        { name: "Acme", message: "" },
+        createFakeBaProjects(),
+      );
+
+      await expect(session.getBaProject("proc-unknown")).resolves.toBeNull();
+      expect(observation).toEqual({
+        title: "Read BA Studio project",
+        description: 'Read the stored artifact bundle for BA Studio project "proc-unknown".',
+      });
+    });
+
+    it("rejects an empty processId on read and write", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" }, createFakeBaProjects());
+      await expect(session.getBaProject("")).rejects.toThrow("processId is required");
+      await expect(session.saveBaProject("", WORKFLOW_STUDIO_DEMO_V11)).rejects.toThrow(
+        "processId is required",
+      );
+    });
+
+    it("saves a bundle and returns a versioned record, then reads it back", async () => {
+      let observation: unknown;
+      const processId = WORKFLOW_STUDIO_DEMO_V11.processGraph.processId;
+      const session = new CustomSessionImpl(
+        { authorizeObservation: (value: unknown) => { observation = value; return Promise.resolve(); } },
+        { name: "Acme", message: "" },
+        createFakeBaProjects(),
+      );
+
+      const saved = await session.saveBaProject(processId, WORKFLOW_STUDIO_DEMO_V11);
+      expect(saved.processId).toBe(processId);
+      expect(saved.version).toBe(1);
+      expect(saved.bundle).toEqual(WORKFLOW_STUDIO_DEMO_V11);
+      expect(observation).toEqual({
+        title: "Save BA Studio project",
+        description: `Persist a new artifact bundle version for BA Studio project "${processId}".`,
+      });
+
+      const reloaded = await session.getBaProject(processId);
+      expect(reloaded).toEqual(saved);
+
+      const second = await session.saveBaProject(processId, WORKFLOW_STUDIO_DEMO_V11);
+      expect(second.version).toBe(2);
+    });
+
+    it("rejects saving a bundle whose processGraph.processId does not match the target project", async () => {
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" }, createFakeBaProjects());
+      await expect(
+        session.saveBaProject("some-other-process-id", WORKFLOW_STUDIO_DEMO_V11),
+      ).rejects.toThrow(/does not match project/);
     });
   });
 
@@ -436,7 +546,7 @@ describe("custom-gatekeeper", () => {
     });
 
     it("creates a BA interview session context with system prompt and opening message", async () => {
-      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" }, createFakeBaProjects());
       const ctx = await session.initialiseBaSession({
         projectName: "Customer Onboarding Redesign",
         stakeholders: [
@@ -456,7 +566,7 @@ describe("custom-gatekeeper", () => {
     });
 
     it("creates a BA review session context", async () => {
-      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" }, createFakeBaProjects());
       const ctx = await session.initialiseBaSession({
         projectName: "Risk Review Portal",
         stakeholders: [{ name: "Carol", role: "Compliance Lead" }],
@@ -467,7 +577,7 @@ describe("custom-gatekeeper", () => {
     });
 
     it("creates a BA handoff session context", async () => {
-      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" }, createFakeBaProjects());
       const ctx = await session.initialiseBaSession({
         projectName: "Payments Modernisation",
         stakeholders: [],
@@ -478,14 +588,14 @@ describe("custom-gatekeeper", () => {
     });
 
     it("rejects an empty project name", async () => {
-      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" }, createFakeBaProjects());
       await expect(
         session.initialiseBaSession({ projectName: "  ", stakeholders: [], mode: "interview" }),
       ).rejects.toThrow("non-empty projectName");
     });
 
     it("rejects an unknown session mode", () => {
-      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" });
+      const session = new CustomSessionImpl(makeQueue(), { name: "Acme", message: "" }, createFakeBaProjects());
       // capnweb-validate rejects invalid union values synchronously before the method body runs.
       expect(() =>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

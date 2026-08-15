@@ -230,6 +230,14 @@ export interface BaSessionContext {
   agentOpeningMessage: string;
 }
 
+/** A stored BA Studio project bundle with its monotonic version and last-write time. */
+export interface BaProjectRecord {
+  processId: string;
+  version: number;
+  updatedAt: string;
+  bundle: WorkflowStudioDemoV11;
+}
+
 /** Example read-only capability provided to the CloudflareOS agent. */
 export interface CustomSession {
   /** Returns the deployment's example information after recording an observation. */
@@ -250,4 +258,17 @@ export interface CustomSession {
    * into BA interview, review, or handoff mode.
    */
   initialiseBaSession(config: BaSessionConfig): Promise<BaSessionContext>;
+
+  /**
+   * Returns the durably stored artifact bundle for a BA Studio project, or
+   * null if nothing has been saved for this processId yet.
+   */
+  getBaProject(processId: string): Promise<BaProjectRecord | null>;
+
+  /**
+   * Validates and durably persists a new artifact bundle version for a BA
+   * Studio project. Each project is stored in its own Durable Object so
+   * projects scale independently of one another.
+   */
+  saveBaProject(processId: string, bundle: WorkflowStudioDemoV11): Promise<BaProjectRecord>;
 }
