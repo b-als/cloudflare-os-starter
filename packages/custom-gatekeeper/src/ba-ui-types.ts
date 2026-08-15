@@ -6,7 +6,7 @@
  * can resolve it directly.
  */
 
-import type { BaProjectRecord, WorkflowStudioDemoV11 } from "./types.js";
+import type { BaProjectRecord, StakeholderSuggestionV11, WorkflowStudioDemoV11 } from "./types.js";
 
 /** RPC capability handed to the BA Studio sandboxed iframe via `startAppUi()`. */
 export interface BaUiApi {
@@ -21,4 +21,12 @@ export interface BaUiApi {
 
   /** Returns a fresh, valid starter bundle for a brand-new project. */
   createStarterBundle(processId: string, processName: string): Promise<WorkflowStudioDemoV11>;
+
+  /**
+   * Returns advisory stakeholder suggestions for a bundle: names/roles
+   * mentioned during interviews plus any role-coverage gaps found by
+   * cross-referencing requirement categories against registered
+   * stakeholder roles. Purely advisory -- a human decides whether to act.
+   */
+  getStakeholderSuggestions(bundle: WorkflowStudioDemoV11): Promise<StakeholderSuggestionV11[]>;
 }

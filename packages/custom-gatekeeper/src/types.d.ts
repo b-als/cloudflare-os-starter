@@ -84,6 +84,20 @@ export interface RequirementItemV11 {
   dependencies?: string[];
 }
 
+/**
+ * A stakeholder someone mentioned during an interview (or that a gap check
+ * inferred is missing) who has not yet been added to `stakeholders`. Purely
+ * advisory: a human decides whether to actually invite/register them.
+ */
+export interface StakeholderSuggestionV11 {
+  id: string;
+  name?: string;
+  role: string;
+  reason: string;
+  source: "interview" | "gapAnalysis";
+  suggestedAt: string;
+}
+
 /** RACI mapping per activity in the process. */
 export interface RaciAssignmentV11 {
   activityId: string;
@@ -112,6 +126,8 @@ export interface RequirementsArtifactV11 {
   requirements: RequirementItemV11[];
   raci: RaciAssignmentV11[];
   decisionLog: DecisionLogEntryV11[];
+  /** People flagged during interviews/analysis as worth consulting, but not yet registered. */
+  stakeholderSuggestions?: StakeholderSuggestionV11[];
 }
 
 /** Conflict register v1.1 with explicit resolution ownership. */

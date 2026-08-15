@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { RpcStub } from 'capnweb'
 import type { BaUiApi } from '../src/ba-ui-types'
-import type { BaProjectRecord, WorkflowStudioDemoV11 } from '../src/types'
+import type { BaProjectRecord, StakeholderSuggestionV11, WorkflowStudioDemoV11 } from '../src/types'
 
 type Tab = 'requirements' | 'conflicts' | 'process' | 'tradeoffs' | 'signoff'
 
@@ -29,22 +29,22 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
   const [tab, setTab] = useState<Tab>('requirements')
   const [status, setStatus] = useState<string>('')
   const [loading, setLoading] = useState(false)
+  const [suggestions, setSuggestions] = useState<StakeholderSuggestionV11[]>([])
 
   async function load(id: string) {
     setLoading(true)
     setStatus('')
     try {
       const existing = await api.getProject(id)
-      if (existing) {
-        setRecord(existing)
-        setBundle(existing.bundle)
-        setStatus(`Loaded version ${existing.version}, saved ${new Date(existing.updatedAt).toLocaleString()}.`)
-      } else {
-        const starter = await api.createStarterBundle(id, id)
-        setRecord(null)
-        setBundle(starter)
-        setStatus('No saved project yet — showing a starter template. Save to persist it.')
-      }
+      const activeBundle = existing ? existing.bundle : await api.createStarterBundle(id, id)
+      setRecord(existing)
+      setBundle(activeBundle)
+      setStatus(
+        existing
+          ? `Loaded version ${existing.version}, saved ${new Date(existing.updatedAt).toLocaleString()}.`
+          : 'No saved project yet — showing a starter template. Save to persist it.',
+      )
+      setSuggestions(await api.getStakeholderSuggestions(activeBundle))
     } catch (err) {
       setStatus(`Failed to load: ${(err as Error).message}`)
     } finally {
@@ -66,6 +66,7 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
       setRecord(saved)
       setBundle(saved.bundle)
       setStatus(`Saved version ${saved.version}.`)
+      setSuggestions(await api.getStakeholderSuggestions(saved.bundle))
     } catch (err) {
       setStatus(`Failed to save: ${(err as Error).message}`)
     } finally {
@@ -103,6 +104,33 @@ export default function App({ api }: { api: RpcStub<BaUiApi> }) {
       </div>
 
       {status && <div style={{ fontSize: 13, marginBottom: 12, opacity: 0.85 }}>{status}</div>}
+
+      {suggestions.length > 0 && (
+        <div
+          style={{
+            border: '1px solid #e0a72e',
+            background: 'rgba(224, 167, 46, 0.1)',
+            borderRadius: 6,
+            padding: 10,
+            marginBottom: 12,
+            fontSize: 13,
+          }}
+        >
+          <strong>Suggested stakeholders to consider</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {suggestions.map((s) => (
+              <li key={s.id}>
+                {s.name ? `${s.name} — ` : ''}
+                <em>{s.role}</em>: {s.reason}
+              </li>
+            ))}
+          </ul>
+          <p style={{ margin: '6px 0 0', opacity: 0.75 }}>
+            These are suggestions only — nobody has been contacted. Add them to the stakeholder
+            list yourself if you'd like to involve them.
+          </p>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #ccc', marginBottom: 12 }}>
         {TABS.map((t) => (

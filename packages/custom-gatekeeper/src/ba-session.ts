@@ -77,6 +77,11 @@ analysis artifacts.
 9. Summarise agreed decisions and post them to the decision log before moving on.
 10. At the end of the interview phase, produce a draft sign-off packet for
     stakeholder review.
+11. When a stakeholder mentions someone who isn't yet registered (e.g. "you'd
+    need to check with Legal on that" or "Priya in Risk owns that decision"),
+    log it as a stakeholder suggestion (name if given, role, and the reason it
+    came up) rather than silently dropping it. Never contact anyone yourself —
+    suggestions are surfaced to a human who decides whether to invite them.
 
 ## Methodology
 - Follow BCS Business Analysis Good Practice and AgileBA/DSDM principles.
@@ -112,6 +117,10 @@ ${stakeholderSection}
 ## Stage gate rules
 - Do not advance from "interview" to "review" until all registered stakeholders
   have confirmed their requirements are captured.
+- Before advancing from "interview" to "review", check whether any requirement
+  category (e.g. compliance, integration) has no registered stakeholder who
+  could plausibly own it, and if so, log a stakeholder suggestion instead of
+  guessing an answer on that stakeholder's behalf.
 - Do not advance from "review" to "handoff" until the sign-off packet has been
   approved (or conditionally approved) by all required signatories.
 - Record every rejection with a reason before looping back.

@@ -74,4 +74,45 @@ describe("BaUiApiImpl", () => {
     const api = new BaUiApiImpl(false, createFakeBaProjects());
     await expect(api.getProject("")).rejects.toThrow(/processId is required/);
   });
+
+  it("merges logged interview suggestions with gap-analysis suggestions, deduped by id", async () => {
+    const api = new BaUiApiImpl(false, createFakeBaProjects());
+    const starter = await api.createStarterBundle("proc-1", "Process one");
+    // The starter template's single requirement is "functional", which has no expected role
+    // keywords, so add a compliance requirement with no matching stakeholder to trigger a gap,
+    // plus a logged interview suggestion to confirm both sources are merged.
+    const bundle = {
+      ...starter,
+      requirements: {
+        ...starter.requirements,
+        requirements: [
+          ...starter.requirements.requirements,
+          {
+            id: "req-compliance",
+            title: "Run a compliance check",
+            category: "compliance" as const,
+            statement: "Statement.",
+            acceptanceCriteria: ["criterion"],
+            priority: "must" as const,
+            ownerStakeholderId: starter.requirements.stakeholders[0].id,
+            sourceStakeholderIds: [starter.requirements.stakeholders[0].id],
+            fitCriterion: "fit",
+            benefitHypothesis: "benefit",
+          },
+        ],
+        stakeholderSuggestions: [
+          {
+            id: "interview-1",
+            name: "Priya",
+            role: "Risk",
+            reason: 'Mentioned as owning the decision during interview.',
+            source: "interview" as const,
+            suggestedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    };
+    const suggestions = await api.getStakeholderSuggestions(bundle);
+    expect(suggestions.map((s) => s.id).sort()).toEqual(["gap-compliance", "interview-1"]);
+  });
 });

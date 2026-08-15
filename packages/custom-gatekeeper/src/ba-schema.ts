@@ -5,9 +5,11 @@ import type {
   ConflictRegisterArtifactV11,
   ProcessGraphArtifactV1,
   ProcessGraphArtifactV11,
+  RequirementItemV11,
   RequirementsArtifactV1,
   RequirementsArtifactV11,
   SignoffPacketArtifactV11,
+  StakeholderSuggestionV11,
   TradeoffRegisterArtifactV11,
 } from "./types.js";
 
@@ -281,6 +283,22 @@ export const BUSINESS_ANALYSIS_SCHEMA_V11: BusinessAnalysisSchemaBundleV11 = {
             requirementIds: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
             ownerStakeholderId: { type: "string", minLength: 1 },
             status: { enum: ["proposed", "approved", "rejected", "superseded"] },
+          },
+        },
+      },
+      stakeholderSuggestions: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "role", "reason", "source", "suggestedAt"],
+          properties: {
+            id: { type: "string", minLength: 1 },
+            name: { type: "string", minLength: 1 },
+            role: { type: "string", minLength: 1 },
+            reason: { type: "string", minLength: 1 },
+            source: { enum: ["interview", "gapAnalysis"] },
+            suggestedAt: { type: "string", format: "date-time" },
           },
         },
       },
@@ -658,6 +676,58 @@ export function validateRequirementsArtifactV11(artifact: RequirementsArtifactV1
   }
 
   return errors;
+}
+
+/**
+ * Maps a requirement category to the stakeholder role(s) generally expected
+ * to be consulted for it. Kept intentionally simple: a keyword match against
+ * registered stakeholder roles, not an org-directory lookup or identity
+ * resolution system. A human always decides whether to act on a suggestion.
+ */
+const CATEGORY_EXPECTED_ROLE_KEYWORDS: Record<RequirementItemV11["category"], string[]> = {
+  compliance: ["compliance", "risk", "legal", "audit"],
+  integration: ["engineering", "platform", "integration", "technical", "it"],
+  data: ["data", "engineering", "platform", "analytics"],
+  nonFunctional: ["engineering", "platform", "security", "operations"],
+  functional: [],
+  reporting: ["analytics", "reporting", "operations"],
+};
+
+/**
+ * Scans a requirements artifact for categories that have no matching
+ * stakeholder role registered (e.g. a "compliance" requirement with nobody
+ * from compliance/risk/legal on the stakeholder list), and returns advisory
+ * suggestions for who to bring in. Does not contact anyone or write
+ * anywhere -- purely a read-side nudge for BA Studio's UI/agent to surface.
+ */
+export function findStakeholderGaps(
+  artifact: Pick<RequirementsArtifactV11, "stakeholders" | "requirements">,
+): StakeholderSuggestionV11[] {
+  const now = new Date().toISOString();
+  const registeredRoles = artifact.stakeholders.map((stakeholder) => stakeholder.role.toLowerCase());
+  const seenCategories = new Set<string>();
+  const suggestions: StakeholderSuggestionV11[] = [];
+
+  for (const requirement of artifact.requirements) {
+    const keywords = CATEGORY_EXPECTED_ROLE_KEYWORDS[requirement.category];
+    if (!keywords.length || seenCategories.has(requirement.category)) continue;
+    seenCategories.add(requirement.category);
+
+    const hasMatchingStakeholder = registeredRoles.some((role) =>
+      keywords.some((keyword) => role.includes(keyword)),
+    );
+    if (!hasMatchingStakeholder) {
+      suggestions.push({
+        id: `gap-${requirement.category}`,
+        role: keywords[0],
+        reason: `Requirement "${requirement.title}" is categorised as ${requirement.category}, but no registered stakeholder has a matching role (expected one of: ${keywords.join(", ")}).`,
+        source: "gapAnalysis",
+        suggestedAt: now,
+      });
+    }
+  }
+
+  return suggestions;
 }
 
 export function validateConflictRegisterArtifactV11(

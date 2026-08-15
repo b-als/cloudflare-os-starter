@@ -9,8 +9,9 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import type { BaProjectDurableObject } from "./ba-project-store.js";
+import { findStakeholderGaps } from "./ba-schema.js";
 import { validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
-import type { BaProjectRecord, WorkflowStudioDemoV11 } from "./types.js";
+import type { BaProjectRecord, StakeholderSuggestionV11, WorkflowStudioDemoV11 } from "./types.js";
 import type { BaUiApi } from "./ba-ui-types.js";
 
 const MAX_PROCESS_ID_LENGTH = 256;
@@ -48,6 +49,18 @@ export class BaUiApiImpl extends RpcTarget implements BaUiApi {
     validateProcessId(processId);
     const stub = this.#baProjects.get(this.#baProjects.idFromName(processId));
     return stub.saveBundle(processId, bundle);
+  }
+
+  async getStakeholderSuggestions(bundle: WorkflowStudioDemoV11): Promise<StakeholderSuggestionV11[]> {
+    // Merge any suggestions the interview agent already logged into the bundle with a fresh
+    // role-coverage gap check, deduping by id so a re-run doesn't pile up duplicates.
+    const logged = bundle.requirements.stakeholderSuggestions ?? [];
+    const gaps = findStakeholderGaps(bundle.requirements);
+    const byId = new Map<string, StakeholderSuggestionV11>();
+    for (const suggestion of [...logged, ...gaps]) {
+      byId.set(suggestion.id, suggestion);
+    }
+    return [...byId.values()];
   }
 
   async createStarterBundle(processId: string, processName: string): Promise<WorkflowStudioDemoV11> {
