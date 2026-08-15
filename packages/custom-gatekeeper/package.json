@@ -5,8 +5,11 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "build": "tsc",
-    "types:check": "tsc --noEmit",
+    "build:app": "node build-app.mjs",
+    "build:app:watch": "node build-app.mjs --watch",
+    "typecheck:app": "tsc -p tsconfig.app.json && tsc -p tsconfig.vite.json",
+    "types:check": "pnpm run typecheck:app && pnpm run build:app && tsc --noEmit",
+    "build": "pnpm run typecheck:app && pnpm run build:app && tsc",
     "test": "vitest run"
   },
   "dependencies": {
@@ -17,8 +20,14 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.20.1",
     "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
+    "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^4.1.10",
     "wrangler": "^4.115.0"
   }

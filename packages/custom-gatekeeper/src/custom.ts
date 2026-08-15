@@ -8,9 +8,11 @@ import { skipRpcValidation, validateRpc } from "capnweb-validate";
 import type {
   AccountDescription,
   ApprovalQueue,
+  AppUiContext,
   Gatekeeper,
   GatekeeperConnectCallback,
   GatekeeperConnectOptions,
+  GatekeeperUiFrame,
   GatekeeperUser,
   GatekeeperUserVerifier,
   ResourceConfiguratorFrame,
@@ -21,6 +23,7 @@ import type {
 import { BUSINESS_ANALYSIS_SCHEMA_V1, BUSINESS_ANALYSIS_SCHEMA_V11 } from "./ba-schema.js";
 import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
 import { createBaSessionContext } from "./ba-session.js";
+import { BaUiApiImpl } from "./ba-ui-api.js";
 import type { BaProjectDurableObject } from "./ba-project-store.js";
 import type {
   BaProjectRecord,
@@ -33,6 +36,7 @@ import type {
   WorkflowStudioDemoV11,
 } from "./types.js";
 import TYPES_CODE from "./types-code.js";
+import APP_HTML from "./generated/app.txt";
 
 const CUSTOM_ICON = {
   url:
@@ -76,6 +80,7 @@ export function describeCustomAccount(): AccountDescription {
     displayName: "Custom Gatekeeper",
     avatar: CUSTOM_ICON,
     singleton: { tsType: "CustomSession" },
+    providesUi: { title: "BA Studio", icon: CUSTOM_ICON },
   };
 }
 
@@ -226,6 +231,12 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
 
   async getSingletonGatekeeperClass(): Promise<DurableObjectClass<Gatekeeper<CustomSession>>> {
     return this.ctx.exports.CustomGatekeeper({});
+  }
+
+  async startAppUi(context: AppUiContext): Promise<GatekeeperUiFrame> {
+    // Hand the sandboxed BA Studio iframe its own capability. isAdmin is supplied fresh per open.
+    const ui = new RpcStub(new BaUiApiImpl(context.isAdmin, this.ctx.exports.BaProjectDurableObject));
+    return { iframeHtml: APP_HTML, ui };
   }
 
   async getSupportedResources(): Promise<SupportedResource[]> {

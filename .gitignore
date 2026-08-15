@@ -1,6 +1,8 @@
 node_modules/
 .local-bin/
 packages/*/dist/
+packages/*/dist-app/
 packages/*/.wrangler/
+packages/custom-gatekeeper/src/generated/app.txt
 packages/*/wrangler.prod.jsonc
 deployment.local.jsonc
