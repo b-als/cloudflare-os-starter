@@ -5,4 +5,5 @@ packages/*/dist-app/
 packages/*/.wrangler/
 packages/custom-gatekeeper/src/generated/app.txt
 packages/*/wrangler.prod.jsonc
+packages/*/wrangler.dev.jsonc
 deployment.local.jsonc

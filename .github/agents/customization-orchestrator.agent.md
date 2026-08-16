@@ -32,24 +32,29 @@ Only one specialist may hold ownership of a file in a sprint.
 ## Operating model
 
 1. Split the request into lanes mapped to the ownership map.
-2. Assign one specialist per lane.
-3. For each lane, define:
+2. For each lane, before implementation starts, run the due-diligence gate
+   (`.github/agents/due-diligence-specialist.agent.md`): search both this repo and the
+   `cloudflare-os` submodule for an existing mechanism the request could reuse/extend instead
+   of duplicating. Record the answer in the lane's handoff.
+3. Assign one specialist per lane.
+4. For each lane, define:
    - inputs consumed,
    - files owned,
    - outputs produced,
    - tests required.
-4. Run lanes in parallel only when file sets do not overlap.
-5. Merge back in this order unless overridden by risk:
+5. Run lanes in parallel only when file sets do not overlap.
+6. Merge back in this order unless overridden by risk:
    - Gatekeeper + Reporter code
    - Deploy pipeline
    - Deployment config
    - Docs/policy
-6. Run final integration check after all merges.
+7. Run final integration check after all merges.
 
 ## Handoff contract (required)
 
 Every specialist must hand off:
 
+- Due diligence note: existing mechanism found/reused, or why none applied
 - Changed files list
 - Behavior delta
 - Validation commands and results

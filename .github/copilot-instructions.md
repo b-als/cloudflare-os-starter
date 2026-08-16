@@ -5,9 +5,10 @@ This repository uses a specialist-agent model. Do not execute multi-file customi
 ## Mandatory routing policy
 
 1. Start with `.github/agents/customization-orchestrator.agent.md` for any non-trivial customization request.
-2. Route implementation to exactly one file owner lane at a time.
-3. If a request spans multiple owners, sequence handoffs through the orchestrator.
-4. Never parallel-edit the same file across multiple agents.
+2. Before any implementation, run the due-diligence gate in `.github/agents/due-diligence-specialist.agent.md`: search both `cloudflare-os-starter` and the `cloudflare-os` submodule for an existing mechanism (agent/tool loop, chat UI, Gatekeeper pattern, binding, script) before building something new. This applies to every lane and every change, however small it looks — see that file for the concrete incident that made this mandatory.
+3. Route implementation to exactly one file owner lane at a time.
+4. If a request spans multiple owners, sequence handoffs through the orchestrator.
+5. Never parallel-edit the same file across multiple agents.
 
 ## Specialist ownership map
 
@@ -19,6 +20,7 @@ This repository uses a specialist-agent model. Do not execute multi-file customi
 - Docs and policy: `.github/agents/docs-policy-specialist.agent.md` owns `README.md`, `docs/**`, `AGENTS.md`, and `.github/agents/**`.
 - QA and release: `.github/agents/qa-release-specialist.agent.md` owns cross-lane validation, release checks, and rollback notes.
 - Deployment execution: `.github/agents/deploy-cloudflare-os.agent.md` owns deploy/redeploy operations.
+- Due diligence gate: `.github/agents/due-diligence-specialist.agent.md` owns no files; it is a mandatory pre-implementation check run by every other lane.
 
 ## Repository safety constraints
 
