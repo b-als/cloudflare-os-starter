@@ -158,6 +158,8 @@ The starter enables structured custom logs and a private console-backed Error Re
 
 Keep deployment-owned Gatekeepers under `packages/`, outside the `cloudflare-os` submodule. `scripts/deploy.mjs` binds this repository's example to the Workshop as `GATEKEEPER_CUSTOM` and Context as `GATEKEEPER_CONTEXT`.
 
+To exercise `GATEKEEPER_CUSTOM` locally (not just after a real deploy), run `pnpm dev:local` from this repo's root, not from inside the `cloudflare-os` submodule. `scripts/dev-local.mjs` wraps the submodule's own local dev launcher and sets `EXTRA_GATEKEEPER_DIRS=gatekeeper-custom=packages/custom-gatekeeper`, which the submodule's `run-dev-server.js` reads to bind `packages/custom-gatekeeper` as `GATEKEEPER_CUSTOM` alongside its own built-in gatekeepers. Running the submodule's `pnpm dev:local` directly will not see this repo's Gatekeepers and BA Studio / Workflow Studio will fail with "gatekeeper app is not available" or "No such service: custom".
+
 The minimal example flow is:
 
 1. `types.d.ts` defines the API visible to TypeScript callers.
