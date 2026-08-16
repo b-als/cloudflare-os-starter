@@ -7,7 +7,7 @@
  * live UI and the agent-facing session capability always see the same data.
  */
 
-import { RpcTarget } from "cloudflare:workers";
+import { RpcTarget } from "capnweb";
 import type { BaProjectDurableObject } from "./ba-project-store.js";
 import type { WorkflowRunDurableObject } from "./workflow-run-store.js";
 import { findStakeholderGaps } from "./ba-schema.js";

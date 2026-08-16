@@ -4,6 +4,7 @@ import {
   RpcTarget,
   WorkerEntrypoint,
 } from "cloudflare:workers";
+import { RpcStub as CapnwebRpcStub } from "capnweb";
 import { skipRpcValidation, validateRpc } from "capnweb-validate";
 import type {
   AccountDescription,
@@ -344,7 +345,11 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
 
   async startAppUi(context: AppUiContext): Promise<GatekeeperUiFrame> {
     // Hand the sandboxed BA Studio iframe its own capability. isAdmin is supplied fresh per open.
-    const ui = new RpcStub(
+    // Note: BaUiApiImpl extends capnweb's own RpcTarget (not the native "cloudflare:workers" one)
+    // and must be wrapped with capnweb's RpcStub, matching the pattern used by
+    // gatekeeper-context/src/library-gatekeeper.ts. Wrapping with the native RpcStub/RpcTarget
+    // instead breaks every RPC method call that takes arguments once bridged to the browser.
+    const ui = new CapnwebRpcStub(
       new BaUiApiImpl(
         context.isAdmin,
         this.ctx.exports.BaProjectDurableObject,
