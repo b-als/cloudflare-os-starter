@@ -11,10 +11,12 @@ import { RpcTarget } from "cloudflare:workers";
 import type { BaProjectDurableObject } from "./ba-project-store.js";
 import type { WorkflowRunDurableObject } from "./workflow-run-store.js";
 import { findStakeholderGaps } from "./ba-schema.js";
-import { validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
+import { buildStarterWorkflowStudioBundle } from "./workflow-demo.js";
 import { advanceRun, assertSignedOff, buildNewRun } from "./workflow-run.js";
+import { generateProcessId, type BaProjectRegistryDurableObject } from "./ba-project-registry.js";
 import type {
   BaProjectRecord,
+  BaProjectSummary,
   StakeholderSuggestionV11,
   WorkflowRunRecordV1,
   WorkflowStudioDemoV11,
@@ -35,17 +37,24 @@ function validateProcessId(processId: string): void {
 export class BaUiApiImpl extends RpcTarget implements BaUiApi {
   readonly #isAdmin: boolean;
   readonly #baProjects: DurableObjectNamespace<BaProjectDurableObject>;
+  readonly #baProjectRegistry: DurableObjectNamespace<BaProjectRegistryDurableObject>;
   readonly #workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>;
 
   constructor(
     isAdmin: boolean,
     baProjects: DurableObjectNamespace<BaProjectDurableObject>,
+    baProjectRegistry: DurableObjectNamespace<BaProjectRegistryDurableObject>,
     workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>,
   ) {
     super();
     this.#isAdmin = isAdmin;
     this.#baProjects = baProjects;
+    this.#baProjectRegistry = baProjectRegistry;
     this.#workflowRuns = workflowRuns;
+  }
+
+  #registryStub() {
+    return this.#baProjectRegistry.get(this.#baProjectRegistry.idFromName("global"));
   }
 
   async isAdmin(): Promise<boolean> {
@@ -61,7 +70,25 @@ export class BaUiApiImpl extends RpcTarget implements BaUiApi {
   async saveProject(processId: string, bundle: WorkflowStudioDemoV11): Promise<BaProjectRecord> {
     validateProcessId(processId);
     const stub = this.#baProjects.get(this.#baProjects.idFromName(processId));
-    return stub.saveBundle(processId, bundle);
+    const record = await stub.saveBundle(processId, bundle);
+    await this.#registryStub().upsert({
+      processId,
+      processName: record.bundle.processName,
+      version: record.version,
+      createdAt: record.updatedAt,
+      updatedAt: record.updatedAt,
+    });
+    return record;
+  }
+
+  async listProjects(): Promise<BaProjectSummary[]> {
+    return this.#registryStub().list();
+  }
+
+  async createProject(processName: string): Promise<BaProjectRecord> {
+    const processId = generateProcessId(processName);
+    const bundle = buildStarterWorkflowStudioBundle(processId, processName);
+    return this.saveProject(processId, bundle);
   }
 
   async getStakeholderSuggestions(bundle: WorkflowStudioDemoV11): Promise<StakeholderSuggestionV11[]> {
@@ -123,96 +150,6 @@ export class BaUiApiImpl extends RpcTarget implements BaUiApi {
 
   async createStarterBundle(processId: string, processName: string): Promise<WorkflowStudioDemoV11> {
     validateProcessId(processId);
-    const name = processName.trim().length > 0 ? processName.trim() : "Untitled process";
-    // Seed one placeholder in each artifact so cross-references in `viewer` are valid; the BA
-    // Studio UI expects these to be edited/replaced as the interview progresses.
-    const bundle: WorkflowStudioDemoV11 = {
-      contractVersion: "workflow-studio-demo/v1.1",
-      processName: name,
-      requirements: {
-        schemaVersion: "requirements/v1.1",
-        processId,
-        generatedAt: new Date().toISOString(),
-        stakeholders: [{ id: "st-owner", name: "Process owner", role: "process-owner" }],
-        requirements: [
-          {
-            id: "req-001",
-            title: "Describe the first requirement",
-            category: "functional",
-            statement: "Replace with a statement captured from stakeholder interviews.",
-            acceptanceCriteria: ["Replace with acceptance criteria."],
-            priority: "must",
-            ownerStakeholderId: "st-owner",
-            sourceStakeholderIds: ["st-owner"],
-            fitCriterion: "Replace with a measurable fit criterion.",
-            benefitHypothesis: "Replace with the expected benefit.",
-          },
-        ],
-        raci: [],
-        decisionLog: [],
-      },
-      conflictRegister: {
-        schemaVersion: "conflicts/v1.1",
-        processId,
-        conflicts: [
-          {
-            id: "conf-001",
-            summary: "Replace with a captured stakeholder conflict, or delete if none yet.",
-            requirementIds: ["req-001"],
-            stakeholderIds: ["st-owner"],
-            impact: "scope",
-            resolutionOwnerStakeholderId: "st-owner",
-            decision: { status: "open" },
-          },
-        ],
-      },
-      processGraph: {
-        schemaVersion: "process-graph/v1.1",
-        processId,
-        nodes: [
-          { id: "n-start", type: "trigger", label: "Start" },
-          { id: "n-end", type: "end", label: "End" },
-        ],
-        edges: [{ id: "e-start-end", source: "n-start", target: "n-end" }],
-      },
-      tradeoffRegister: {
-        schemaVersion: "tradeoffs/v1.1",
-        processId,
-        options: [
-          {
-            id: "opt-001",
-            title: "Option A",
-            summary: "Replace with a candidate solution option.",
-            scores: { userValue: 3, deliveryEffort: 3, operationalRisk: 3, complianceFit: 3 },
-            impacts: { scope: "medium", cost: "medium", timeline: "medium", risk: "medium" },
-          },
-        ],
-        preferredOptionId: "opt-001",
-      },
-      signoffPacket: {
-        schemaVersion: "signoff/v1.1",
-        processId,
-        baselineVersion: "0.1.0",
-        approvedAt: new Date().toISOString(),
-        approvers: [
-          {
-            stakeholderId: "st-owner",
-            role: "Process owner",
-            decision: "approved",
-            note: "Starter template auto-approval; replace once real sign-off is captured.",
-          },
-        ],
-      },
-      viewer: {
-        selectedRequirementId: "req-001",
-        highlightedConflictId: "conf-001",
-        highlightedTradeoffOptionId: "opt-001",
-      },
-    };
-    const errors = validateWorkflowStudioDemoV11(bundle);
-    if (errors.length) {
-      throw new Error(`Generated starter bundle is invalid: ${errors.join(" | ")}`);
-    }
-    return bundle;
+    return buildStarterWorkflowStudioBundle(processId, processName);
   }
 }

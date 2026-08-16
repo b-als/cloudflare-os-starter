@@ -19,7 +19,8 @@ import {
 import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "../src/workflow-demo.js";
 import { createBaSessionContext, getBaSessionCatalogEntry } from "../src/ba-session.js";
 import type { BaProjectDurableObject } from "../src/ba-project-store.js";
-import type { BaProjectRecord } from "../src/types.js";
+import type { BaProjectRegistryDurableObject } from "../src/ba-project-registry.js";
+import type { BaProjectRecord, BaProjectSummary } from "../src/types.js";
 
 /**
  * An in-memory fake of the BaProjectDurableObject namespace, keyed by DO name (== processId),
@@ -63,6 +64,25 @@ function createFakeBaProjects(): DurableObjectNamespace<BaProjectDurableObject> 
 
 // Local alias to avoid importing the full WorkflowStudioDemoV11 type just for structural validation.
 type WorkflowStudioDemoV11Like = Parameters<typeof validateWorkflowStudioDemoV11>[0];
+
+/** An in-memory fake of the BaProjectRegistryDurableObject singleton namespace. */
+function createFakeBaProjectRegistry(): DurableObjectNamespace<BaProjectRegistryDurableObject> {
+  const projects = new Map<string, BaProjectSummary>();
+  const stub = {
+    async list(): Promise<BaProjectSummary[]> {
+      return [...projects.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
+    async upsert(summary: BaProjectSummary): Promise<void> {
+      const existing = projects.get(summary.processId);
+      projects.set(summary.processId, existing ? { ...summary, createdAt: existing.createdAt } : summary);
+    },
+  };
+  return {
+    idFromName: (name: string) => name,
+    get: () => stub,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
 
 describe("custom-gatekeeper", () => {
   it("describes an auto-provisioned singleton", () => {
@@ -204,6 +224,7 @@ describe("custom-gatekeeper", () => {
         { authorizeObservation: (value: unknown) => { observation = value; return Promise.resolve(); } },
         { name: "Acme", message: "" },
         createFakeBaProjects(),
+        createFakeBaProjectRegistry(),
       );
 
       const saved = await session.saveBaProject(processId, WORKFLOW_STUDIO_DEMO_V11);
@@ -227,6 +248,43 @@ describe("custom-gatekeeper", () => {
       await expect(
         session.saveBaProject("some-other-process-id", WORKFLOW_STUDIO_DEMO_V11),
       ).rejects.toThrow(/does not match project/);
+    });
+
+    it("lists no projects until one is created, then lists it after saveBaProject and createBaProject", async () => {
+      const registry = createFakeBaProjectRegistry();
+      const session = new CustomSessionImpl(
+        makeQueue(),
+        { name: "Acme", message: "" },
+        createFakeBaProjects(),
+        registry,
+      );
+
+      await expect(session.listBaProjects()).resolves.toEqual([]);
+
+      const processId = WORKFLOW_STUDIO_DEMO_V11.processGraph.processId;
+      await session.saveBaProject(processId, WORKFLOW_STUDIO_DEMO_V11);
+      const afterSave = await session.listBaProjects();
+      expect(afterSave).toHaveLength(1);
+      expect(afterSave[0]).toMatchObject({ processId, processName: WORKFLOW_STUDIO_DEMO_V11.processName });
+
+      const created = await session.createBaProject("Untitled process");
+      const afterCreate = await session.listBaProjects();
+      expect(afterCreate).toHaveLength(2);
+      expect(afterCreate.map((summary) => summary.processId)).toContain(created.processId);
+    });
+
+    it("createBaProject generates a fresh processId and a valid starter bundle", async () => {
+      const session = new CustomSessionImpl(
+        makeQueue(),
+        { name: "Acme", message: "" },
+        createFakeBaProjects(),
+        createFakeBaProjectRegistry(),
+      );
+
+      const record = await session.createBaProject("Customer Onboarding");
+      expect(record.processId).toMatch(/^proc-customer-onboarding-/);
+      expect(record.bundle.processName).toBe("Customer Onboarding");
+      expect(validateWorkflowStudioDemoV11(record.bundle as WorkflowStudioDemoV11Like)).toEqual([]);
     });
   });
 

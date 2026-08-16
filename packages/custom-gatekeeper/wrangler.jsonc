@@ -20,6 +20,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["WorkflowRunDurableObject"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["BaProjectRegistryDurableObject"]
     }
   ],
   "vars": {

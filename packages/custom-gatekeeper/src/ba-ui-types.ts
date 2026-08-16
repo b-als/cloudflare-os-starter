@@ -8,6 +8,7 @@
 
 import type {
   BaProjectRecord,
+  BaProjectSummary,
   StakeholderSuggestionV11,
   WorkflowRunRecordV1,
   WorkflowStudioDemoV11,
@@ -26,6 +27,18 @@ export interface BaUiApi {
 
   /** Returns a fresh, valid starter bundle for a brand-new project. */
   createStarterBundle(processId: string, processName: string): Promise<WorkflowStudioDemoV11>;
+
+  /**
+   * Lists summaries of every BA Studio project created on this deployment,
+   * most recently updated first. Backs the BA Projects management page.
+   */
+  listProjects(): Promise<BaProjectSummary[]>;
+
+  /**
+   * Creates a new BA Studio project with a starter artifact bundle,
+   * generating a unique `processId` from `processName`.
+   */
+  createProject(processName: string): Promise<BaProjectRecord>;
 
   /**
    * Returns advisory stakeholder suggestions for a bundle: names/roles

@@ -5,6 +5,7 @@ export * from "./workflow-demo.js";
 export * from "./ba-project-store.js";
 export * from "./workflow-run.js";
 export * from "./workflow-run-store.js";
+export * from "./ba-project-registry.js";
 
 export default {
   async fetch(): Promise<Response> {

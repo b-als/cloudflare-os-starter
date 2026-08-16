@@ -185,3 +185,103 @@ export function validateWorkflowStudioDemoV11(demo: WorkflowStudioDemoV11): stri
 
   return errors;
 }
+
+/**
+ * Builds a fresh, schema-valid starter bundle for a brand-new BA Studio
+ * project: one placeholder in each artifact so cross-references in `viewer`
+ * are valid. Shared by `BaUiApiImpl.createStarterBundle()` (sandboxed app /
+ * Workflow Studio UI) and `CustomSessionImpl.createBaProject()` (agent-facing
+ * `createBaProject` tool call) so both surfaces produce identical starter
+ * content instead of maintaining two copies.
+ */
+export function buildStarterWorkflowStudioBundle(processId: string, processName: string): WorkflowStudioDemoV11 {
+  const name = processName.trim().length > 0 ? processName.trim() : "Untitled process";
+  const bundle: WorkflowStudioDemoV11 = {
+    contractVersion: "workflow-studio-demo/v1.1",
+    processName: name,
+    requirements: {
+      schemaVersion: "requirements/v1.1",
+      processId,
+      generatedAt: new Date().toISOString(),
+      stakeholders: [{ id: "st-owner", name: "Process owner", role: "process-owner" }],
+      requirements: [
+        {
+          id: "req-001",
+          title: "Describe the first requirement",
+          category: "functional",
+          statement: "Replace with a statement captured from stakeholder interviews.",
+          acceptanceCriteria: ["Replace with acceptance criteria."],
+          priority: "must",
+          ownerStakeholderId: "st-owner",
+          sourceStakeholderIds: ["st-owner"],
+          fitCriterion: "Replace with a measurable fit criterion.",
+          benefitHypothesis: "Replace with the expected benefit.",
+        },
+      ],
+      raci: [],
+      decisionLog: [],
+    },
+    conflictRegister: {
+      schemaVersion: "conflicts/v1.1",
+      processId,
+      conflicts: [
+        {
+          id: "conf-001",
+          summary: "Replace with a captured stakeholder conflict, or delete if none yet.",
+          requirementIds: ["req-001"],
+          stakeholderIds: ["st-owner"],
+          impact: "scope",
+          resolutionOwnerStakeholderId: "st-owner",
+          decision: { status: "open" },
+        },
+      ],
+    },
+    processGraph: {
+      schemaVersion: "process-graph/v1.1",
+      processId,
+      nodes: [
+        { id: "n-start", type: "trigger", label: "Start" },
+        { id: "n-end", type: "end", label: "End" },
+      ],
+      edges: [{ id: "e-start-end", source: "n-start", target: "n-end" }],
+    },
+    tradeoffRegister: {
+      schemaVersion: "tradeoffs/v1.1",
+      processId,
+      options: [
+        {
+          id: "opt-001",
+          title: "Option A",
+          summary: "Replace with a candidate solution option.",
+          scores: { userValue: 3, deliveryEffort: 3, operationalRisk: 3, complianceFit: 3 },
+          impacts: { scope: "medium", cost: "medium", timeline: "medium", risk: "medium" },
+        },
+      ],
+      preferredOptionId: "opt-001",
+    },
+    signoffPacket: {
+      schemaVersion: "signoff/v1.1",
+      processId,
+      baselineVersion: "0.1.0",
+      approvedAt: new Date().toISOString(),
+      approvers: [
+        {
+          stakeholderId: "st-owner",
+          role: "Process owner",
+          decision: "approved",
+          note: "Starter template auto-approval; replace once real sign-off is captured.",
+        },
+      ],
+    },
+    viewer: {
+      selectedRequirementId: "req-001",
+      highlightedConflictId: "conf-001",
+      highlightedTradeoffOptionId: "opt-001",
+    },
+  };
+  const errors = validateWorkflowStudioDemoV11(bundle);
+  if (errors.length) {
+    throw new Error(`Generated starter bundle is invalid: ${errors.join(" | ")}`);
+  }
+  return bundle;
+}

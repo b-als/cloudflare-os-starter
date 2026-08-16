@@ -21,14 +21,16 @@ import type {
   VendorDescription,
 } from "@gadgets/workshop-shared/gatekeeper";
 import { BUSINESS_ANALYSIS_SCHEMA_V1, BUSINESS_ANALYSIS_SCHEMA_V11 } from "./ba-schema.js";
-import { WORKFLOW_STUDIO_DEMO_V11, validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
+import { WORKFLOW_STUDIO_DEMO_V11, buildStarterWorkflowStudioBundle, validateWorkflowStudioDemoV11 } from "./workflow-demo.js";
 import { createBaSessionContext } from "./ba-session.js";
 import { BaUiApiImpl } from "./ba-ui-api.js";
 import type { BaProjectDurableObject } from "./ba-project-store.js";
+import { generateProcessId, type BaProjectRegistryDurableObject } from "./ba-project-registry.js";
 import type { WorkflowRunDurableObject } from "./workflow-run-store.js";
 import { advanceRun, assertSignedOff, buildNewRun } from "./workflow-run.js";
 import type {
   BaProjectRecord,
+  BaProjectSummary,
   BaSessionConfig,
   BaSessionContext,
   BusinessAnalysisSchemaBundleV1,
@@ -92,19 +94,26 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
   readonly #approvalQueue: ObservationQueue;
   readonly #info: CustomDeploymentInfo;
   readonly #baProjects: DurableObjectNamespace<BaProjectDurableObject>;
+  readonly #baProjectRegistry: DurableObjectNamespace<BaProjectRegistryDurableObject>;
   readonly #workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>;
 
   constructor(
     approvalQueue: ObservationQueue,
     info: CustomDeploymentInfo,
     baProjects: DurableObjectNamespace<BaProjectDurableObject>,
+    baProjectRegistry: DurableObjectNamespace<BaProjectRegistryDurableObject>,
     workflowRuns: DurableObjectNamespace<WorkflowRunDurableObject>,
   ) {
     super();
     this.#approvalQueue = approvalQueue;
     this.#info = info;
     this.#baProjects = baProjects;
+    this.#baProjectRegistry = baProjectRegistry;
     this.#workflowRuns = workflowRuns;
+  }
+
+  #registryStub() {
+    return this.#baProjectRegistry.get(this.#baProjectRegistry.idFromName("global"));
   }
 
   async getDeploymentInfo(): Promise<CustomDeploymentInfo> {
@@ -175,8 +184,39 @@ export class CustomSessionImpl extends RpcTarget implements CustomSession {
       title: "Save BA Studio project",
       description: `Persist a new artifact bundle version for BA Studio project "${processId}".`,
     });
+    return this.#persistBundle(processId, bundle);
+  }
+
+  async listBaProjects(): Promise<BaProjectSummary[]> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "List BA Studio projects",
+      description: "List summaries of every BA Studio project on this deployment.",
+    });
+    return this.#registryStub().list();
+  }
+
+  async createBaProject(processName: string): Promise<BaProjectRecord> {
+    await this.#approvalQueue.authorizeObservation({
+      title: "Create BA Studio project",
+      description: `Create a new BA Studio project "${processName}" with a starter artifact bundle.`,
+    });
+    const processId = generateProcessId(processName);
+    const bundle = buildStarterWorkflowStudioBundle(processId, processName);
+    return this.#persistBundle(processId, bundle);
+  }
+
+  /** Saves a bundle to its project Durable Object, then syncs the registry entry. */
+  async #persistBundle(processId: string, bundle: WorkflowStudioDemoV11): Promise<BaProjectRecord> {
     const stub = this.#baProjects.get(this.#baProjects.idFromName(processId));
-    return stub.saveBundle(processId, bundle);
+    const record = await stub.saveBundle(processId, bundle);
+    await this.#registryStub().upsert({
+      processId,
+      processName: record.bundle.processName,
+      version: record.version,
+      createdAt: record.updatedAt,
+      updatedAt: record.updatedAt,
+    });
+    return record;
   }
 
   async startWorkflowRun(processId: string, note?: string): Promise<WorkflowRunRecordV1> {
@@ -273,6 +313,7 @@ export class CustomGatekeeper extends DurableObject<Cloudflare.Env> implements G
         message: this.env.CUSTOM_MESSAGE,
       },
       this.ctx.exports.BaProjectDurableObject,
+      this.ctx.exports.BaProjectRegistryDurableObject,
       this.ctx.exports.WorkflowRunDurableObject,
     );
   }
@@ -304,7 +345,12 @@ export class CustomAccount extends WorkerEntrypoint<Cloudflare.Env> implements G
   async startAppUi(context: AppUiContext): Promise<GatekeeperUiFrame> {
     // Hand the sandboxed BA Studio iframe its own capability. isAdmin is supplied fresh per open.
     const ui = new RpcStub(
-      new BaUiApiImpl(context.isAdmin, this.ctx.exports.BaProjectDurableObject, this.ctx.exports.WorkflowRunDurableObject),
+      new BaUiApiImpl(
+        context.isAdmin,
+        this.ctx.exports.BaProjectDurableObject,
+        this.ctx.exports.BaProjectRegistryDurableObject,
+        this.ctx.exports.WorkflowRunDurableObject,
+      ),
     );
     return { iframeHtml: APP_HTML, ui };
   }

@@ -302,6 +302,19 @@ export interface BaProjectRecord {
   bundle: WorkflowStudioDemoV11;
 }
 
+/**
+ * Lightweight registry entry for a BA Studio project, used by project
+ * list/selection UI so it does not need to load every project's full
+ * artifact bundle just to show a picker.
+ */
+export interface BaProjectSummary {
+  processId: string;
+  processName: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Example read-only capability provided to the CloudflareOS agent. */
 export interface CustomSession {
   /** Returns the deployment's example information after recording an observation. */
@@ -335,6 +348,19 @@ export interface CustomSession {
    * projects scale independently of one another.
    */
   saveBaProject(processId: string, bundle: WorkflowStudioDemoV11): Promise<BaProjectRecord>;
+
+  /**
+   * Lists summaries of every BA Studio project created on this deployment,
+   * most recently updated first. Backs the BA Projects management page.
+   */
+  listBaProjects(): Promise<BaProjectSummary[]>;
+
+  /**
+   * Creates a new BA Studio project with a starter artifact bundle,
+   * generating a unique `processId` from `processName`, and registers it so
+   * it immediately appears in `listBaProjects()`.
+   */
+  createBaProject(processName: string): Promise<BaProjectRecord>;
 
   /**
    * Starts a new workflow run from the signed-off `processGraph` for a BA
